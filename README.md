@@ -99,3 +99,10 @@ npm run tauri:build
 ├── push.bat                # 一键推送到仓库
 └── docs/DESIGN-PLAN.md     # 设计计划
 ```
+
+## 许可证
+
+[MIT](LICENSE) © 2025 FileView Team
+
+> 若希望衍生作品保持开源，可改用 GPL-3.0；仅需替换 `LICENSE` 文件并同步 `package.json` /
+> `Cargo.toml` 中的 `license` 字段。
