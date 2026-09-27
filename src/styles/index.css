@@ -1,0 +1,265 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============ Fluent (Windows 11) design tokens ============ */
+:root {
+  color-scheme: light;
+
+  --smoke-bg: rgba(249, 249, 249, 0.85);
+  --smoke-bg-card: rgba(255, 255, 255, 0.7);
+  --smoke-bg-card-hover: rgba(255, 255, 255, 0.92);
+  --smoke-bg-subtle: rgba(243, 243, 243, 0.86);
+  --smoke-bg-layer: #ffffff;
+
+  --stroke-color: rgba(0, 0, 0, 0.0578);
+  --stroke-strong: rgba(0, 0, 0, 0.14);
+
+  --ink-primary: rgba(0, 0, 0, 0.8956);
+  --ink-secondary: rgba(0, 0, 0, 0.6063);
+  --ink-tertiary: rgba(0, 0, 0, 0.4458);
+  --ink-on-accent: #ffffff;
+
+  --accent: #0067c0;
+  --accent-hover: #1a75bb;
+  --accent-subtle: rgba(0, 103, 192, 0.1);
+  --accent-text: #005fb8;
+
+  --success: #0f7b0f;
+  --warning: #9d5d00;
+  --danger: #c42b1c;
+
+  /* JSON syntax (light) */
+  --syn-key: #a31515;
+  --syn-string: #0451a5;
+  --syn-number: #098658;
+  --syn-bool: #0000ff;
+  --syn-null: #af00db;
+  --syn-punct: rgba(0, 0, 0, 0.6);
+  --syn-comment: #008000;
+  --syn-heading: #800000;
+  --syn-link: #0451a5;
+  --syn-quote: #6a737d;
+  --syn-section: #800040;
+  --syn-timestamp: #7a5c00;
+  --syn-log-info: #098658;
+  --syn-log-debug: #6a737d;
+
+  --focus-ring: 0 0 0 2px var(--smoke-bg-layer), 0 0 0 4px var(--accent);
+  --mica-tint: rgba(243, 243, 243, 0.5);
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --smoke-bg: rgba(32, 32, 32, 0.86);
+  --smoke-bg-card: rgba(255, 255, 255, 0.051);
+  --smoke-bg-card-hover: rgba(255, 255, 255, 0.084);
+  --smoke-bg-subtle: rgba(255, 255, 255, 0.0419);
+  --smoke-bg-layer: #272727;
+
+  --stroke-color: rgba(255, 255, 255, 0.0698);
+  --stroke-strong: rgba(255, 255, 255, 0.12);
+
+  --ink-primary: rgba(255, 255, 255, 0.8956);
+  --ink-secondary: rgba(255, 255, 255, 0.6063);
+  --ink-tertiary: rgba(255, 255, 255, 0.4458);
+  --ink-on-accent: #000000;
+
+  --accent: #4cc2ff;
+  --accent-hover: #63cdff;
+  --accent-subtle: rgba(76, 194, 255, 0.12);
+  --accent-text: #99ebff;
+
+  --success: #6ccb5f;
+  --warning: #fce100;
+  --danger: #ff99a4;
+
+  /* JSON syntax (dark) */
+  --syn-key: #9cdcfe;
+  --syn-string: #ce9178;
+  --syn-number: #b5cea8;
+  --syn-bool: #569cd6;
+  --syn-null: #c586c0;
+  --syn-punct: rgba(255, 255, 255, 0.6);
+  --syn-comment: #6a9955;
+  --syn-heading: #569cd6;
+  --syn-link: #9cdcfe;
+  --syn-quote: #9ca3af;
+  --syn-section: #c586c0;
+  --syn-timestamp: #b5cea8;
+  --syn-log-info: #4ec9b0;
+  --syn-log-debug: #9ca3af;
+
+  --focus-ring: 0 0 0 2px var(--smoke-bg-layer), 0 0 0 4px var(--accent);
+  --mica-tint: rgba(32, 32, 32, 0.5);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  @apply bg-smoke-bg text-ink font-sans antialiased;
+  font-size: 14px;
+  user-select: none;
+}
+
+/* Mica-like backdrop for the window shell */
+.mica-bg {
+  background-color: var(--mica-tint);
+  backdrop-filter: blur(60px) saturate(1.2);
+  -webkit-backdrop-filter: blur(60px) saturate(1.2);
+}
+
+/* Fluent focus ring */
+.fluent-focus:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+/* Fluent hover/pressed for list items */
+.fluent-item {
+  transition: background-color 120ms cubic-bezier(0.33, 0, 0.67, 1);
+}
+.fluent-item:hover {
+  background-color: var(--smoke-bg-card-hover);
+}
+.fluent-item:active {
+  background-color: var(--smoke-bg-subtle);
+}
+
+/* Selection styles inside JSON content (text must be selectable) */
+.selectable {
+  user-select: text;
+  cursor: text;
+}
+
+/* Scrollbars – Windows 11 style thin overlay */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--ink-tertiary) transparent;
+}
+*::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+*::-webkit-scrollbar-thumb {
+  background-color: var(--ink-tertiary);
+  border-radius: 8px;
+  border: 4px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--ink-secondary);
+}
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* JSON syntax highlight classes */
+.syn-key { color: var(--syn-key); }
+.syn-string { color: var(--syn-string); }
+.syn-number { color: var(--syn-number); }
+.syn-bool { color: var(--syn-bool); }
+.syn-null { color: var(--syn-null); }
+.syn-punct { color: var(--syn-punct); }
+.syn-comment { color: var(--syn-comment); font-style: italic; }
+.syn-heading { color: var(--syn-heading); font-weight: 600; }
+.syn-strong { font-weight: 600; }
+.syn-em { font-style: italic; }
+.syn-code { color: var(--syn-string); }
+.syn-link { color: var(--syn-link); text-decoration: underline; }
+.syn-quote { color: var(--syn-quote); font-style: italic; }
+.syn-section { color: var(--syn-section); font-weight: 600; }
+.syn-keyname { color: var(--syn-key); }
+.syn-timestamp { color: var(--syn-timestamp); }
+.syn-log-error { color: var(--danger); font-weight: 600; }
+.syn-log-warn { color: var(--warning); font-weight: 600; }
+.syn-log-info { color: var(--syn-log-info); }
+.syn-log-debug { color: var(--syn-log-debug); }
+
+/* 内容视图字号（由设置 fontSize 驱动）与等比行高 */
+:root {
+  --json-font-size: 12.5px;
+  --json-line-height: 20px;
+}
+
+/* Markdown 预览排版 */
+.markdown-body {
+  line-height: 1.7;
+  user-select: text;
+}
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4,
+.markdown-body h5,
+.markdown-body h6 {
+  color: var(--ink-primary);
+  font-weight: 600;
+  line-height: 1.3;
+  margin: 1em 0 0.5em;
+}
+.markdown-body h1 { font-size: 1.7em; border-bottom: 1px solid var(--stroke-color); padding-bottom: 0.25em; }
+.markdown-body h2 { font-size: 1.4em; border-bottom: 1px solid var(--stroke-color); padding-bottom: 0.2em; }
+.markdown-body h3 { font-size: 1.2em; }
+.markdown-body h4 { font-size: 1.05em; }
+.markdown-body p { margin: 0.6em 0; }
+.markdown-body ul,
+.markdown-body ol { margin: 0.6em 0; padding-left: 1.6em; }
+.markdown-body li { margin: 0.25em 0; }
+.markdown-body code {
+  font-family: ui-monospace, Consolas, monospace;
+  background: var(--smoke-bg-subtle);
+  border: 1px solid var(--stroke-color);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+  font-size: 0.92em;
+}
+.markdown-body .md-pre {
+  background: var(--smoke-bg-subtle);
+  border: 1px solid var(--stroke-color);
+  border-radius: 6px;
+  padding: 0.8em 1em;
+  overflow-x: auto;
+  margin: 0.8em 0;
+}
+.markdown-body .md-pre code {
+  background: none;
+  border: none;
+  padding: 0;
+}
+.markdown-body blockquote {
+  margin: 0.8em 0;
+  padding: 0.2em 1em;
+  border-left: 3px solid var(--accent);
+  color: var(--ink-secondary);
+  background: var(--smoke-bg-subtle);
+  border-radius: 0 4px 4px 0;
+}
+.markdown-body hr {
+  border: none;
+  border-top: 1px solid var(--stroke-strong);
+  margin: 1.2em 0;
+}
+.markdown-body a { color: var(--accent-text); text-decoration: underline; }
+.markdown-body img { max-width: 100%; border-radius: 4px; }
+.markdown-body del { color: var(--ink-tertiary); }
+
+/* Drag region for custom title bar */
+[data-tauri-drag-region] {
+  -webkit-app-region: drag;
+}
+
+@keyframes fluent-fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-fade-in {
+  animation: fluent-fade-in 160ms cubic-bezier(0.33, 0, 0.67, 1);
+}

@@ -1,0 +1,29 @@
+# ====== 依赖 ======
+node_modules/
+.npm-cache/
+
+# ====== 构建产物（可再生） ======
+dist/
+src-tauri/target/
+src-tauri/gen/
+
+# ====== 日志 / 临时文件 ======
+*.log
+npm-debug.log*
+*.tmp
+*.bak
+*.swp
+
+# ====== 测试残留 ======
+smoke.*
+
+# ====== 系统 / 编辑器 ======
+Thumbs.db
+desktop.ini
+.DS_Store
+.vscode/
+.idea/
+.vs/
+
+# ====== 打包残留 ======
+tools/
