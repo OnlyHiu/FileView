@@ -11,7 +11,7 @@
 ![rust](https://img.shields.io/badge/Rust-stable-orange?logo=rust)
 ![license](https://img.shields.io/badge/license-MIT-green)
 
-[功能](#-功能) · [格式](#-支持格式) · [下载](#-下载) · [开发](#-开发) · [许可证](#-许可证)
+[功能](#-功能) · [界面](#-界面预览) · [格式](#-支持格式) · [下载](#-下载) · [开发](#-开发) · [许可证](#-许可证)
 
 </div>
 
@@ -25,6 +25,12 @@ INI 有结构化键值视图，日志按级别着色。内置编辑器支持保�
 并可深度集成 Windows 资源管理器（右键菜单 / 文件关联 / 开机自启）。
 
 > Windows 11 Fluent / WinUI 3 风格界面 · Tauri 2 (Rust) + React 18 + Vite + Tailwind CSS
+
+## 🖼️ 界面预览
+
+<p align="center">
+  <img src="docs/screenshot.png" alt="FileView 界面预览" width="90%">
+</p>
 
 ## ✨ 功能
 
