@@ -1,89 +1,87 @@
+<div align="center">
+
 # FileView
 
-Windows 11 Fluent 风格的多格式文件查看与编辑器。
-技术栈：**Tauri 2 (Rust) + React 18 + Vite + Tailwind CSS**。
+**Windows 11 Fluent 风格的多格式文件查看与编辑器**
+**A Fluent-design multi-format file viewer & editor for Windows**
 
-支持 **JSON / JSONC / JSONL、Markdown、INI 配置、日志（.log）与纯文本（.txt）** 等格式，
-按文件类型自动切换对应视图，也支持编辑保存。
+![platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D4)
+![tauri](https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white)
+![react](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)
+![rust](https://img.shields.io/badge/Rust-stable-orange?logo=rust)
+![license](https://img.shields.io/badge/license-MIT-green)
 
-## 功能
+[功能](#-功能) · [格式](#-支持格式) · [下载](#-下载) · [开发](#-开发) · [许可证](#-许可证)
 
-- **多格式视图**（随文件类型自动切换）：
-  - JSON 家族（.json/.jsonc/.jsonl/.ndjson/.har/.geojson）：树形（折叠/展开、虚拟滚动）、表格（对象数组自动转表）、原始
-  - Markdown（.md/.markdown）：渲染预览 + 源码
-  - INI 配置（.ini/.cfg/.conf）：结构视图（分组键值）+ 源码
-  - 日志/文本（.log/.txt）：语法高亮（日志级别/时间戳着色）
-- **解析诊断**（JSON）：行列级错误定位、错误行高亮；支持严格 JSON / JSONC（注释、尾逗号）/ JSONL（逐行）
-- **查询**（JSON）：JSONPath（`$.a.b[0]`、`[*]`、`..key`、`['key']`）+ 全文搜索（键/值、不区分大小写），点击结果跳转树节点
-- **编辑**：编辑器页 / 查看器均可编辑；**Ctrl+S 保存**（未命名文档「另存为」）、格式化（2/4 空格/Tab）、压缩 minify、键排序、多标签页（可删到零个）、拖拽打开、脏标记、文件变更自动重载
-- **系统集成（设置页）**：
-  - Windows 右键菜单注入「用 FileView 打开」（所有文件 / JSON / JSONL / 文件夹 / 目录背景）
-  - 文件关联（.json/.jsonc/.jsonl/.ndjson/.har/.geojson/.md/.markdown/.ini/.cfg/.conf/.txt/.log）
-    + Capabilities/RegisteredApplications 注册，引导系统「默认应用」设置
-  - 开机自启（HKCU Run 键，可最小化启动）
-  - 一键清理全部系统集成（managed keys 机制保证注册表无残留）
+</div>
 
-## 页面导航
+---
+
+## 简介
+
+FileView 是一款 Windows 桌面应用，用于**查看、解析与编辑** JSON、Markdown、INI 配置、日志和纯文本文件。
+打开不同类型的文件会自动切换到对应视图：JSON 有树形 / 表格 / 原始三视图，Markdown 有渲染预览，
+INI 有结构化键值视图，日志按级别着色。内置编辑器支持保存（Ctrl+S）、格式化、JSONPath 查询，
+并可深度集成 Windows 资源管理器（右键菜单 / 文件关联 / 开机自启）。
+
+> Windows 11 Fluent / WinUI 3 风格界面 · Tauri 2 (Rust) + React 18 + Vite + Tailwind CSS
+
+## ✨ 功能
+
+| 模块 | 说明 |
+|---|---|
+| **多格式视图** | JSON：树形（虚拟滚动）/ 表格（对象数组转表）/ 原始；Markdown：预览 / 源码；INI：结构 / 源码；日志：级别与时间戳着色 |
+| **解析诊断** | 行列级错误定位、错误行高亮；严格 JSON / JSONC（注释、尾逗号）/ JSONL（逐行）|
+| **查询** | JSONPath（`$.a.b[0]`、`[*]`、`..key`、`['key']`）+ 全文搜索（键/值，点击跳转树节点）|
+| **编辑保存** | 编辑器页 / 查看器均可编辑；**Ctrl+S 保存**、另存为、格式化（2/4 空格/Tab）、压缩、键排序 |
+| **标签页** | 多标签编辑、脏标记（未保存 •）、空白页可删除、拖拽打开、文件变更自动重载 |
+| **系统集成** | 右键菜单「用 FileView 打开」、文件关联与默认应用注册、开机自启、一键清理（注册表无残留）|
+
+## 📄 支持格式
+
+| 类型 | 扩展名 | 视图 |
+|---|---|---|
+| JSON 家族 | `.json` `.jsonc` `.jsonl` `.ndjson` `.har` `.geojson` | 树形 / 表格 / 原始 |
+| Markdown | `.md` `.markdown` | 预览 / 源码 |
+| INI 配置 | `.ini` `.cfg` `.conf` | 结构 / 源码 |
+| 日志 / 文本 | `.log` `.txt` | 高亮文本 |
+
+## 🖥️ 页面
 
 | 页面 | 说明 |
 |---|---|
-| 查看器 | 只读展示解析结果（树/表/原始/预览/结构），也可直接编辑保存 |
-| 编辑器 | 编辑当前文件或空白文档；JSON 附带格式化/压缩/键排序工具 |
+| 查看器 | 只读展示解析结果（也可直接编辑保存）|
+| 编辑器 | 编辑当前文件或空白文档，JSON 附带格式化 / 压缩 / 键排序工具 |
 | 查询 | JSONPath 查询与全文搜索 |
-| 设置 | 外观、编辑器偏好、系统集成 |
+| 设置 | 外观、编辑器偏好、Windows 系统集成 |
 
-## 开发
+## 📥 下载
+
+| 文件 | 说明 |
+|---|---|
+| `FileView_x.x.x_x64-setup.exe` | NSIS 安装包（当前用户安装，含卸载项）|
+| `fileview.exe` | 免安装单文件，双击即用 |
+
+> 安装后在设置页勾选扩展名即可注册右键菜单与文件关联。
+
+## 🛠️ 开发
 
 ```bash
 npm install          # 安装前端依赖
-npm run tauri:dev    # 开发模式（启动 Vite + Tauri 窗口）
+npm run tauri:dev    # 开发模式（Vite + Tauri 窗口）
+npm run dev          # 仅浏览器预览（JS 降级解析）
 ```
 
-浏览器预览 UI（无后端，使用 JS 降级解析）：
-
-```bash
-npm run dev          # http://localhost:5173
-```
-
-## 测试
+测试与打包：
 
 ```bash
 cd src-tauri && cargo test   # Rust 单元测试（解析/格式化/JSONPath/注册表）
+npm run tauri:build          # 打包 exe + NSIS 安装器
 ```
-
-## 打包（Windows）
-
-```bash
-npm run tauri:build
-```
-
-产物：
-
-| 文件 | 位置 |
-|---|---|
-| 免安装可执行程序 | `src-tauri/target/release/fileview.exe` |
-| NSIS 安装器 | `src-tauri/target/release/bundle/nsis/FileView_x.x.x_x64-setup.exe` |
 
 > 依赖：Node 18+、Rust stable-msvc、VS Build Tools 2022（C++ 工作负载）、WebView2 运行时（Win11 自带）。
-> 应用图标由 `node scripts/gen-icon.mjs` 程序化生成（`src-tauri/icons/`）。
 
-## 一键推送
-
-`push.bat`：填入仓库地址后双击，自动 init → commit → push（详见脚本内注释）。
-
-## 系统集成实现说明
-
-- 全部注册表写入走 **HKCU**（无需管理员）；写入键路径记录于
-  `HKCU\Software\FileView\managed_keys`，卸载/「一键清理」按清单精准回滚。
-- 右键菜单：`HKCU\Software\Classes\*\shell\FileView` 等（NSIS 版出现在
-  Windows 11「显示更多选项」经典菜单；MSIX 打包版可进入新版紧凑右键菜单顶层）。
-- 文件关联：注册 ProgID（`HKCU\Software\Classes\FileView.json` 等）+ `OpenWithProgids`；
-  **不伪造 UserChoice**（Windows 哈希保护），通过 `ms-settings:defaultapps` 引导用户确认默认应用。
-- 开机自启：`HKCU\...\CurrentVersion\Run`。
-- 所有变更后调用 `SHChangeNotify(SHCNE_ASSOCCHANGED)` 即时刷新资源管理器。
-- 启动时按设置幂等注入系统集成，并自动迁移/清理旧品牌（JsonViewer）注册表痕迹。
-
-## 目录结构
+## 📁 项目结构
 
 ```
 ├── src/                    # 前端（React + Tailwind）
@@ -100,9 +98,17 @@ npm run tauri:build
 └── docs/DESIGN-PLAN.md     # 设计计划
 ```
 
-## 许可证
+## 🔗 系统集成实现说明
+
+- 全部注册表写入走 **HKCU**（无需管理员）；写入清单记录于 `HKCU\Software\FileView\managed_keys`，
+  卸载 /「一键清理」按清单精准回滚，保证无残留。
+- 右键菜单：`HKCU\Software\Classes\*\shell\FileView` 等（位于 Windows 11「显示更多选项」经典菜单）。
+- 文件关联：注册 ProgID（`HKCU\Software\Classes\FileView.json` 等）+ `OpenWithProgids` +
+  Capabilities/RegisteredApplications；**不伪造 UserChoice**（Windows 哈希保护），
+  通过 `ms-settings:defaultapps` 引导用户确认默认应用。
+- 启动时按设置幂等注入系统集成，并自动迁移/清理旧品牌注册表痕迹。
+- 所有变更后调用 `SHChangeNotify(SHCNE_ASSOCCHANGED)` 即时刷新资源管理器。
+
+## 📜 许可证
 
 [MIT](LICENSE) © 2025 FileView Team
-
-> 若希望衍生作品保持开源，可改用 GPL-3.0；仅需替换 `LICENSE` 文件并同步 `package.json` /
-> `Cargo.toml` 中的 `license` 字段。
