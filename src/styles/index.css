@@ -250,6 +250,24 @@ body {
 .markdown-body a { color: var(--accent-text); text-decoration: underline; }
 .markdown-body img { max-width: 100%; border-radius: 4px; }
 .markdown-body del { color: var(--ink-tertiary); }
+.markdown-body .md-table {
+  border-collapse: collapse;
+  margin: 0.8em 0;
+  width: 100%;
+}
+.markdown-body .md-table th,
+.markdown-body .md-table td {
+  border: 1px solid var(--stroke-strong);
+  padding: 0.4em 0.8em;
+  text-align: left;
+}
+.markdown-body .md-table thead th {
+  background: var(--smoke-bg-subtle);
+  font-weight: 600;
+}
+.markdown-body .md-table tbody tr:nth-child(even) td {
+  background: var(--smoke-bg-subtle);
+}
 
 /* Drag region for custom title bar */
 [data-tauri-drag-region] {
