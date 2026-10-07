@@ -57,10 +57,12 @@ INI 有结构化键值视图，日志按级别着色。内置编辑器支持保�
 
 ## 📥 下载
 
+前往 **[Releases](https://github.com/OnlyHiu/FileView/releases)** 获取全部版本，最新版：
+
 | 文件 | 说明 |
 |---|---|
-| `FileView_x.x.x_x64-setup.exe` | NSIS 安装包（当前用户安装，含卸载项）|
-| `fileview.exe` | 免安装单文件，双击即用 |
+| [**FileView_0.1.0_x64-setup.exe**](https://github.com/OnlyHiu/FileView/releases/latest/download/FileView_0.1.0_x64-setup.exe) | NSIS 安装包（推荐，含卸载项）|
+| [**fileview.exe**](https://github.com/OnlyHiu/FileView/releases/latest/download/fileview.exe) | 免安装单文件，双击即用 |
 
 > 安装后在设置页勾选扩展名即可注册右键菜单与文件关联。
 
