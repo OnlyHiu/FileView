@@ -327,6 +327,113 @@ export const getFileMtime = (path: string): Promise<number | null> =>
 export const takeStartupFile = (): Promise<string | null> =>
   isTauri() ? invoke("take_startup_file") : Promise.resolve(null);
 
+// ============ 标签页分离为独立窗口 ============
+
+export interface DetachPayload {
+  name: string;
+  path: string | null;
+  text: string;
+  dirty: boolean;
+}
+
+/**
+ * 把标签页分离到一个新的独立窗口；创建成功后返回 true。
+ * 有磁盘路径且未修改时新窗口自行读盘，否则通过事件把内存文本传过去，
+ * 保证未保存的修改不会丢失。
+ */
+export async function detachTabToWindow(payload: DetachPayload): Promise<boolean> {
+  if (!isTauri()) return false;
+  const label = `detached-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const url = payload.path
+    ? `index.html?detach=1&file=${encodeURIComponent(payload.path)}`
+    : "index.html?detach=1";
+
+  let x: number | undefined;
+  let y: number | undefined;
+  try {
+    const { cursorPosition } = await import("@tauri-apps/api/window");
+    const pos = await cursorPosition();
+    // 让光标落在新窗口标题栏附近，而不是窗口左上角
+    x = Math.max(0, Math.round(pos.x / window.devicePixelRatio) - 90);
+    y = Math.max(0, Math.round(pos.y / window.devicePixelRatio) - 18);
+  } catch {
+    // 取不到光标位置就交给系统默认放置
+  }
+
+  let unlisten: (() => void) | undefined;
+  let timeout: number | undefined;
+  // 先注册握手监听，再创建窗口，避免新窗口就绪信号丢失
+  let readyResolve: ((ok: boolean) => void) | null = null;
+  const ready = new Promise<boolean>((resolve) => {
+    readyResolve = resolve;
+  });
+
+  try {
+    const { listen, emitTo } = await import("@tauri-apps/api/event");
+    unlisten = await listen<{ label: string }>("detach-ready", (e) => {
+      if (e.payload?.label !== label) return;
+      readyResolve?.(true);
+      readyResolve = null;
+    });
+    timeout = window.setTimeout(() => {
+      readyResolve?.(false);
+      readyResolve = null;
+    }, 8000);
+
+    const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+    const win = new WebviewWindow(label, {
+      url,
+      title: payload.name,
+      width: 1000,
+      height: 700,
+      minWidth: 680,
+      minHeight: 460,
+      x,
+      y,
+      decorations: false,
+      transparent: true,
+      shadow: true,
+      visible: false,
+      dragDropEnabled: true,
+      center: false,
+    });
+    let created = true;
+    const createdPromise = new Promise<void>((resolve) => {
+      void win.once("tauri://created", () => resolve());
+      void win.once("tauri://error", () => {
+        created = false;
+        resolve();
+      });
+    });
+    const ok = await Promise.race([
+      (async () => {
+        await createdPromise;
+        return created ? await ready : false;
+      })(),
+      new Promise<boolean>((resolve) => window.setTimeout(() => resolve(false), 8000)),
+    ]);
+    if (!ok) {
+      // 新窗口未能就绪：清理掉，避免留下隐藏的空白窗口
+      try {
+        await win.destroy();
+      } catch {
+        // 已销毁 / 创建失败
+      }
+      return false;
+    }
+    // 无磁盘路径 / 有未保存修改：把内存文本交给新窗口
+    if (!payload.path || payload.dirty) {
+      await emitTo(label, "detach-payload", payload);
+    }
+    return true;
+  } catch {
+    return false;
+  } finally {
+    if (timeout !== undefined) window.clearTimeout(timeout);
+    unlisten?.();
+  }
+}
+
 export const integrationStatus = (): Promise<IntegrationStatus> =>
   isTauri()
     ? invoke("integration_status")

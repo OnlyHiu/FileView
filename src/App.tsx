@@ -13,9 +13,9 @@ import { EmptyState } from "./features/EmptyState";
 import { EditorPage } from "./features/EditorPage";
 import { QueryPanel } from "./features/QueryPanel";
 import { SettingsPage } from "./features/SettingsPage";
-import { isTauri, openFilePicker, readFileText, getFileMtime, takeStartupFile } from "./lib/api";
+import { isTauri, openFilePicker, readFileText, getFileMtime, takeStartupFile, detachTabToWindow } from "./lib/api";
 import { getDiskBaseline, isTabDirty } from "./stores/jsonStore";
-import { viewsFor, kindLabel } from "./lib/types";
+import { viewsFor, kindLabel, type Tab } from "./lib/types";
 
 const NAV_ITEMS: { id: Page; label: string; icon: string }[] = [
   { id: "viewer", label: "查看器", icon: "tree" },
@@ -23,6 +23,9 @@ const NAV_ITEMS: { id: Page; label: string; icon: string }[] = [
   { id: "query", label: "查询", icon: "search" },
   { id: "settings", label: "设置", icon: "settings" },
 ];
+
+/** 分离窗口只应消费一次负载（React StrictMode 下 effect 会执行两次） */
+let detachPayloadHandled = false;
 
 export default function App() {
   const page = useJsonStore((s) => s.page);
@@ -90,36 +93,89 @@ export default function App() {
         document.documentElement.classList.toggle("dark", t === "dark");
         setTheme(t);
 
-        // 命令行参数传入的文件（文件关联 / 拖到图标）优先加载
-        const startup = await takeStartupFile();
-        if (startup) {
-          const payload = await readFileText(startup);
-          loadFile(payload.path, payload.text);
-          if (payload.truncated) {
-            useJsonStore
-              .getState()
-              .setStatus(`文件超过 64MB，仅加载了前面部分，统计与视图不完整`);
-          }
-        } else if (s.startup !== "blank") {
-          // 启动行为：按设置恢复上次会话 / 最近文件
-          // last 严格恢复上次打开的文件；recent 依次尝试最近列表中仍可用的文件
-          const candidates = s.startup === "last" ? s.recentFiles.slice(0, 1) : s.recentFiles;
-          let restored = false;
-          for (const path of candidates) {
+        const params = new URLSearchParams(window.location.search);
+        const isDetached = params.has("detach");
+        const detachedFile = isDetached ? params.get("file") : null;
+
+        if (isDetached) {
+          // 分离窗口：只载入被拖出的标签，不恢复上次会话
+          const { getCurrentWindow } = await import("@tauri-apps/api/window");
+          const { listen, emit } = await import("@tauri-apps/api/event");
+          const label = getCurrentWindow().label;
+          let payloadArrived: () => void = () => {};
+          if (!detachedFile) {
+            let resolved = false;
+            const arrival = new Promise<void>((resolve) => {
+              payloadArrived = () => {
+                if (resolved) return;
+                resolved = true;
+                resolve();
+              };
+            });
+            await listen<{
+              name: string;
+              path: string | null;
+              text: string;
+              dirty: boolean;
+            }>("detach-payload", (e) => {
+              if (detachPayloadHandled) return;
+              detachPayloadHandled = true;
+              const p = e.payload;
+              useJsonStore.getState().loadDetached(p.name, p.path, p.text, p.dirty);
+              payloadArrived();
+            });
+            // 通知主窗口就绪，再等待内存文本（未保存内容）
+            await emit("detach-ready", { label });
+            await Promise.race([
+              arrival,
+              new Promise<void>((resolve) => window.setTimeout(resolve, 4000)),
+            ]);
+          } else {
             try {
-              const payload = await readFileText(path);
+              const payload = await readFileText(detachedFile);
               loadFile(payload.path, payload.text);
+              if (payload.truncated) {
+                useJsonStore
+                  .getState()
+                  .setStatus(`文件超过 64MB，仅加载了前面部分，统计与视图不完整`);
+              }
+            } catch (e) {
+              useJsonStore.getState().setStatus(`打开文件失败: ${e}`);
+            }
+            await emit("detach-ready", { label });
+          }
+        } else {
+          // 命令行参数传入的文件（文件关联 / 拖到图标）优先加载
+          const startup = await takeStartupFile();
+          if (startup) {
+            const payload = await readFileText(startup);
+            loadFile(payload.path, payload.text);
+            if (payload.truncated) {
               useJsonStore
                 .getState()
-                .setStatus(`已恢复${s.startup === "last" ? "上次会话" : "最近"}的文件: ${path}`);
-              restored = true;
-              break;
-            } catch {
-              // 文件已不可用，尝试下一个
+                .setStatus(`文件超过 64MB，仅加载了前面部分，统计与视图不完整`);
             }
-          }
-          if (!restored && candidates.length > 0) {
-            useJsonStore.getState().setStatus("启动恢复失败：最近的文件已不可用");
+          } else if (s.startup !== "blank") {
+            // 启动行为：按设置恢复上次会话 / 最近文件
+            // last 严格恢复上次打开的文件；recent 依次尝试最近列表中仍可用的文件
+            const candidates = s.startup === "last" ? s.recentFiles.slice(0, 1) : s.recentFiles;
+            let restored = false;
+            for (const path of candidates) {
+              try {
+                const payload = await readFileText(path);
+                loadFile(payload.path, payload.text);
+                useJsonStore
+                  .getState()
+                  .setStatus(`已恢复${s.startup === "last" ? "上次会话" : "最近"}的文件: ${path}`);
+                restored = true;
+                break;
+              } catch {
+                // 文件已不可用，尝试下一个
+              }
+            }
+            if (!restored && candidates.length > 0) {
+              useJsonStore.getState().setStatus("启动恢复失败：最近的文件已不可用");
+            }
           }
         }
         // 等解析完成后显示窗口：呈现时内容已就绪，无空白帧
@@ -246,6 +302,25 @@ export default function App() {
     }
   }, [loadFile]);
 
+  // ============ 标签页分离为独立窗口 ============
+  const handleDetach = useCallback(
+    async (t: Tab) => {
+      const ok = await detachTabToWindow({
+        name: t.name,
+        path: t.path,
+        text: t.text,
+        dirty: isTabDirty(t),
+      });
+      if (ok) {
+        closeTab(t.id);
+        useJsonStore.getState().setStatus(`已将「${t.name}」分离为独立窗口`);
+      } else {
+        useJsonStore.getState().setStatus("分离为独立窗口失败");
+      }
+    },
+    [closeTab]
+  );
+
   // ============ 快捷键 ============
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -338,33 +413,16 @@ export default function App() {
         </div>
 
         {/* 标签页 */}
-        <div className="flex items-end ml-4 h-full overflow-x-auto" data-tauri-drag-region>
+        <div className="flex items-end ml-4 h-full overflow-x-auto">
           {tabs.map((t) => (
-            <div
+            <TabItem
               key={t.id}
-              onClick={() => switchTab(t.id)}
-              className={`group flex items-center gap-1.5 px-3 h-8 mx-0.5 rounded-t-md cursor-default text-[12px] max-w-[180px] ${
-                t.id === activeTabId
-                  ? "bg-smoke-bg-card text-ink border-t border-x border-stroke"
-                  : "text-ink-secondary hover:bg-smoke-bg-card-hover"
-              }`}
-            >
-              <Icon name="file" size={12} className="shrink-0" />
-              <span className="truncate">
-                {t.name}
-                {isTabDirty(t) && <span className="text-accent-text font-bold"> •</span>}
-              </span>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  closeTab(t.id);
-                }}
-                title="关闭标签页"
-                className="opacity-0 group-hover:opacity-100 text-ink-tertiary hover:text-ink"
-              >
-                <Icon name="close" size={10} />
-              </button>
-            </div>
+              tab={t}
+              active={t.id === activeTabId}
+              onActivate={() => switchTab(t.id)}
+              onClose={() => closeTab(t.id)}
+              onDetach={() => void handleDetach(t)}
+            />
           ))}
           <button
             onClick={newTab}
@@ -561,6 +619,131 @@ export default function App() {
         <span className="truncate max-w-[260px]">{activeTab?.path ?? activeTab?.name}</span>
       </footer>
     </div>
+  );
+}
+
+/** 长按多久后进入「可拖出」状态 */
+const LONG_PRESS_MS = 420;
+/** 进入可拖出状态后，移动多远才算真正拖出 */
+const DRAG_THRESHOLD = 14;
+
+function TabItem({
+  tab,
+  active,
+  onActivate,
+  onClose,
+  onDetach,
+}: {
+  tab: Tab;
+  active: boolean;
+  onActivate: () => void;
+  onClose: () => void;
+  onDetach: () => void;
+}) {
+  const [holding, setHolding] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const [hint, setHint] = useState<{ x: number; y: number } | null>(null);
+  const press = useRef<{ x: number; y: number; timer: number; moved: boolean } | null>(null);
+  const holdingRef = useRef(false);
+  /** 最近一次长按结束的时间戳：用于吞掉紧随其后的 click */
+  const suppressClickAt = useRef(0);
+
+  const reset = () => {
+    if (press.current) window.clearTimeout(press.current.timer);
+    press.current = null;
+    holdingRef.current = false;
+    setHolding(false);
+    setDragging(false);
+    setHint(null);
+  };
+
+  const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    const el = e.currentTarget;
+    el.setPointerCapture(e.pointerId);
+    const timer = window.setTimeout(() => {
+      holdingRef.current = true;
+      setHolding(true);
+      setHint({ x: e.clientX, y: e.clientY });
+    }, LONG_PRESS_MS);
+    press.current = { x: e.clientX, y: e.clientY, timer, moved: false };
+  };
+
+  const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const p = press.current;
+    if (!p) return;
+    const dist = Math.hypot(e.clientX - p.x, e.clientY - p.y);
+    if (holdingRef.current) {
+      if (dist > DRAG_THRESHOLD && !p.moved) {
+        p.moved = true;
+        setDragging(true);
+      }
+      if (p.moved) setHint({ x: e.clientX, y: e.clientY });
+    } else if (dist > 10) {
+      // 未进入长按就移动：取消长按，保留普通点击
+      window.clearTimeout(p.timer);
+      press.current = null;
+    }
+  };
+
+  const onPointerUp = () => {
+    const moved = press.current?.moved ?? false;
+    const held = holdingRef.current;
+    reset();
+    if (held) suppressClickAt.current = Date.now();
+    if (moved) onDetach();
+  };
+
+  return (
+    <>
+      <div
+        onClick={() => {
+          if (Date.now() - suppressClickAt.current < 600) return;
+          onActivate();
+        }}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={reset}
+        title="长按并拖出，可分离为独立窗口"
+        className={`group relative flex items-center gap-1.5 px-3 h-8 mx-0.5 rounded-t-md text-[12px] max-w-[180px] select-none touch-none transition-shadow ${
+          dragging
+            ? "cursor-grabbing opacity-60"
+            : holding
+              ? "cursor-grab ring-2 ring-accent"
+              : "cursor-default"
+        } ${
+          active
+            ? "bg-smoke-bg-card text-ink border-t border-x border-stroke"
+            : "text-ink-secondary hover:bg-smoke-bg-card-hover"
+        }`}
+      >
+        <Icon name="file" size={12} className="shrink-0" />
+        <span className="truncate">
+          {tab.name}
+          {isTabDirty(tab) && <span className="text-accent-text font-bold"> •</span>}
+        </span>
+        <button
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            onClose();
+          }}
+          title="关闭标签页"
+          className="opacity-0 group-hover:opacity-100 text-ink-tertiary hover:text-ink"
+        >
+          <Icon name="close" size={10} />
+        </button>
+      </div>
+      {holding && hint && (
+        <div
+          className="fixed z-[999] pointer-events-none rounded-md border border-stroke bg-smoke-bg-card px-2 py-1 text-[11px] text-ink shadow-lg"
+          style={{ left: hint.x + 14, top: hint.y + 14 }}
+        >
+          {dragging ? "松开即可分离为独立窗口" : "拖动标签页，可分离为独立窗口"}
+        </div>
+      )}
+    </>
   );
 }
 

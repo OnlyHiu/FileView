@@ -48,6 +48,8 @@ interface JsonState {
   closeTab: (id: number) => void;
   switchTab: (id: number) => void;
   loadFile: (path: string, text: string) => void;
+  /** 从主窗口分离出来的标签：在新窗口建立独立文档（含未保存内容） */
+  loadDetached: (name: string, path: string | null, text: string, dirty: boolean) => void;
   reloadFromDisk: (path: string, text: string) => void;
   setEditorText: (text: string) => void;
   reparse: () => Promise<void>;
@@ -209,8 +211,33 @@ export const useJsonStore = create<JsonState>((set, get) => ({
         };
       }
       const t: Tab = { id: tabSeq++, name, path, text };
+      // 打开文件时清掉从未编辑过的空白「未命名」标签，避免残留空标签页
+      const blank = s.tabs.find((x) => !x.path && !isTabDirty(x) && x.text.trim() === "");
+      const rest = blank ? s.tabs.filter((x) => x.id !== blank.id) : s.tabs;
       return {
-        tabs: [...s.tabs, t],
+        tabs: [...rest, t],
+        activeTabId: t.id,
+        expanded: {},
+        selectedId: null,
+        ...docStateFor(t, s.view),
+      };
+    });
+    void get().reparse();
+  },
+
+  loadDetached: (name, path, text, dirty) => {
+    // 未保存的文件内容：没有磁盘基线，保证脏标记与主窗口一致
+    if (path && !dirty) diskBaselines.set(path, text);
+    else if (path) diskBaselines.delete(path);
+    if (path) recordRecent(path);
+    set((s) => {
+      const t: Tab = { id: tabSeq++, name, path, text };
+      const blank = s.tabs.find(
+        (x) => x.id === s.activeTabId && !x.path && x.text.trim() === ""
+      );
+      const rest = blank ? s.tabs.filter((x) => x.id !== blank.id) : s.tabs;
+      return {
+        tabs: [...rest, t],
         activeTabId: t.id,
         expanded: {},
         selectedId: null,
