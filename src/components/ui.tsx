@@ -29,6 +29,7 @@ const ICON_PATHS: Record<string, string> = {
   sun: "M12 7a5 5 0 1 0 0 10 5 5 0 0 0 0-10zm0-5v2m0 18v2M2 12h2m18 0h2M4.9 4.9l1.4 1.4m11.4 11.4l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4",
   moon: "M20 14a8 8 0 1 1-10-10 7 7 0 0 0 10 10z",
   refresh: "M20 12a8 8 0 1 1-2.3-5.6M20 4v4h-4",
+  external: "M14 4h6v6M20 4l-8 8M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5",
   info: "M12 3a9 9 0 1 1 0 18 9 9 0 0 1 0-18zm0 4v5m0 4h.01",
   warning: "M12 3l10 18H2zM12 9v5m0 3h.01",
 };

@@ -3,7 +3,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useJsonStore, type Page, type ViewMode } from "./stores/jsonStore";
 import { useSettingsStore } from "./stores/settingsStore";
-import { Icon, SegmentedControl, Button, Tooltip } from "./components/ui";
+import { Icon, SegmentedControl, Tooltip, Dialog } from "./components/ui";
+import { MenuBar } from "./components/MenuBar";
 import { TreeView } from "./features/TreeView";
 import { TableView } from "./features/TableView";
 import { RawView } from "./features/RawView";
@@ -16,13 +17,6 @@ import { SettingsPage } from "./features/SettingsPage";
 import { isTauri, openFilePicker, readFileText, getFileMtime, takeStartupFile, detachTabToWindow } from "./lib/api";
 import { getDiskBaseline, isTabDirty } from "./stores/jsonStore";
 import { viewsFor, kindLabel, type Tab } from "./lib/types";
-
-const NAV_ITEMS: { id: Page; label: string; icon: string }[] = [
-  { id: "viewer", label: "查看器", icon: "tree" },
-  { id: "editor", label: "编辑器", icon: "code" },
-  { id: "query", label: "查询", icon: "search" },
-  { id: "settings", label: "设置", icon: "settings" },
-];
 
 /** 分离窗口只应消费一次负载（React StrictMode 下 effect 会执行两次） */
 let detachPayloadHandled = false;
@@ -54,6 +48,7 @@ export default function App() {
   const loadSettings = useSettingsStore((s) => s.load);
 
   const [theme, setTheme] = useState<"light" | "dark">("light");
+  const [aboutOpen, setAboutOpen] = useState(false);
 
   // ============ 启动：主题 → 载入文档 → 显示窗口（避免启动白闪） ============
   const revealedRef = useRef(false);
@@ -321,29 +316,76 @@ export default function App() {
     [closeTab]
   );
 
+  const handleDetachActive = useCallback(() => {
+    const st = useJsonStore.getState();
+    const t = st.tabs.find((x) => x.id === st.activeTabId);
+    if (t) void handleDetach(t);
+  }, [handleDetach]);
+
+  // ============ 编辑菜单动作 ============
+  const copyAllText = useCallback(async () => {
+    const st = useJsonStore.getState();
+    const t = st.tabs.find((x) => x.id === st.activeTabId);
+    if (!t) return;
+    try {
+      await navigator.clipboard.writeText(t.text);
+      st.setStatus("已复制全部内容");
+    } catch (e) {
+      st.setStatus(`复制失败: ${e}`);
+    }
+  }, []);
+
+  const copyFilePath = useCallback(async () => {
+    const st = useJsonStore.getState();
+    const t = st.tabs.find((x) => x.id === st.activeTabId);
+    if (!t?.path) {
+      st.setStatus("当前标签尚未保存到磁盘，没有文件路径");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(t.path);
+      st.setStatus(`已复制路径: ${t.path}`);
+    } catch (e) {
+      st.setStatus(`复制失败: ${e}`);
+    }
+  }, []);
+
+  const toggleTheme = useCallback(() => {
+    const next = theme === "dark" ? "light" : "dark";
+    void useSettingsStore.getState().patch({ theme: next });
+    useSettingsStore.setState((s) => ({ settings: { ...s.settings, theme: next } }));
+  }, [theme]);
+
   // ============ 快捷键 ============
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.ctrlKey && e.key === "o") {
+      if (e.ctrlKey && e.key.toLowerCase() === "o") {
         e.preventDefault();
         void handleOpen();
       } else if (e.ctrlKey && e.key.toLowerCase() === "s") {
         e.preventDefault();
         void saveFile();
-      } else if (e.ctrlKey && e.key === "f") {
+      } else if (e.ctrlKey && e.key.toLowerCase() === "n") {
+        e.preventDefault();
+        newTab();
+      } else if (e.ctrlKey && e.key.toLowerCase() === "w") {
+        e.preventDefault();
+        const id = useJsonStore.getState().activeTabId;
+        if (id !== null) closeTab(id);
+      } else if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "f") {
+        e.preventDefault();
+        void applyFormat();
+      } else if (e.ctrlKey && e.key.toLowerCase() === "f") {
         e.preventDefault();
         setPage("query");
       } else if (e.key === "F5") {
         e.preventDefault();
         void reparse();
-      } else if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "f") {
-        e.preventDefault();
-        void applyFormat();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [handleOpen, setPage, reparse, applyFormat, saveFile]);
+  }, [handleOpen, setPage, reparse, applyFormat, saveFile, newTab, closeTab]);
 
   // ============ 拖拽打开 ============
   useEffect(() => {
@@ -398,22 +440,146 @@ export default function App() {
       {/* ============ 标题栏 ============ */}
       <header
         data-tauri-drag-region
-        className="h-10 flex items-center pl-3 pr-0 select-none shrink-0 border-b border-stroke/60"
+        className="h-9 flex items-center pl-3 pr-0 select-none shrink-0"
       >
-        <div className="flex items-center gap-2" data-tauri-drag-region>
+        <div className="flex items-center gap-2 min-w-0" data-tauri-drag-region>
           <img
             src={isTauri() ? "icon.png" : undefined}
             alt=""
-            className="w-4 h-4"
+            className="w-4 h-4 shrink-0"
             onError={(e) => ((e.target as HTMLImageElement).style.display = "none")}
           />
-          <span className="text-[12px] font-medium text-ink-secondary" data-tauri-drag-region>
+          <span className="text-[12px] font-medium text-ink-secondary shrink-0" data-tauri-drag-region>
             FileView
           </span>
+          {activeTab && (
+            <span
+              className="text-[11px] text-ink-tertiary truncate max-w-[520px]"
+              data-tauri-drag-region
+            >
+              — {activeTab.path ?? activeTab.name}
+            </span>
+          )}
         </div>
 
-        {/* 标签页 */}
-        <div className="flex items-end ml-4 h-full overflow-x-auto">
+        <div className="flex-1" data-tauri-drag-region />
+
+        {/* 窗口控制 */}
+        <div className="flex items-stretch h-9">
+          <button
+            onClick={() => void windowAction("minimize")}
+            className="w-11 h-9 flex items-center justify-center text-ink-secondary hover:bg-smoke-bg-card-hover"
+          >
+            <Icon name="minimize" size={12} />
+          </button>
+          <button
+            onClick={() => void windowAction("maximize")}
+            className="w-11 h-9 flex items-center justify-center text-ink-secondary hover:bg-smoke-bg-card-hover"
+          >
+            <Icon name="maximize" size={11} />
+          </button>
+          <button
+            onClick={() => void windowAction("close")}
+            className="w-11 h-9 flex items-center justify-center text-ink-secondary hover:bg-danger hover:text-white"
+          >
+            <Icon name="close" size={12} />
+          </button>
+        </div>
+      </header>
+
+      {/* ============ 菜单栏 ============ */}
+      <MenuBar
+        page={page}
+        view={view}
+        fileKind={fileKind}
+        theme={theme}
+        hasTab={!!activeTab}
+        isJson={fileKind === "json"}
+        onNewTab={newTab}
+        onOpen={() => void handleOpen()}
+        onSave={() => void saveFile()}
+        onCloseTab={() => activeTab && closeTab(activeTab.id)}
+        onFormat={() => void applyFormat()}
+        onMinify={() => void applyMinify()}
+        onSort={() => void applySort()}
+        onReparse={() => void reparse()}
+        onCopyText={() => void copyAllText()}
+        onCopyPath={() => void copyFilePath()}
+        onDetach={handleDetachActive}
+        onQuit={() => void windowAction("close")}
+        onAbout={() => setAboutOpen(true)}
+        onPage={setPage}
+        onView={setView}
+        onToggleTheme={toggleTheme}
+      />
+
+      {/* ============ 工具栏 ============ */}
+      <div className="flex items-center gap-1 px-2 h-10 border-b border-stroke/60 shrink-0">
+        <ToolButton icon="plus" title="新建标签 (Ctrl+N)" onClick={newTab} />
+        <ToolButton icon="open" title="打开文件 (Ctrl+O)" onClick={() => void handleOpen()} />
+        <ToolButton
+          icon="save"
+          title="保存 (Ctrl+S)"
+          onClick={() => void saveFile()}
+          disabled={!activeTab}
+        />
+        <ToolDivider />
+        <ToolButton
+          icon="refresh"
+          title="重新解析 (F5)"
+          onClick={() => void reparse()}
+          disabled={!activeTab}
+        />
+        <ToolButton
+          icon="code"
+          title="格式化 (Ctrl+Shift+F)"
+          onClick={() => void applyFormat()}
+          disabled={!activeTab || fileKind !== "json"}
+        />
+        <ToolButton
+          icon="play"
+          title="压缩 JSON"
+          onClick={() => void applyMinify()}
+          disabled={!activeTab || fileKind !== "json"}
+        />
+        <ToolButton
+          icon="copy"
+          title="键排序"
+          onClick={() => void applySort()}
+          disabled={!activeTab || fileKind !== "json"}
+        />
+        <ToolDivider />
+        <ToolButton
+          icon="external"
+          title="将当前标签分离为独立窗口"
+          onClick={handleDetachActive}
+          disabled={!activeTab}
+        />
+        <div className="flex-1" />
+        {page === "viewer" && !isDocEmpty && (
+          <SegmentedControl
+            value={view}
+            onChange={(v) => setView(v as ViewMode)}
+            options={viewsFor(fileKind)}
+          />
+        )}
+        {fileKind === "json" && (
+          <select
+            value={parseMode}
+            onChange={(e) => setParseMode(e.target.value as typeof parseMode)}
+            className="h-7 rounded-sm border border-stroke-strong bg-smoke-bg-layer text-ink text-[12px] px-2"
+            title="JSON 解析模式"
+          >
+            <option value="strict">严格 JSON</option>
+            <option value="jsonc">JSONC（注释/尾逗号）</option>
+            <option value="jsonl">JSONL（逐行）</option>
+          </select>
+        )}
+      </div>
+
+      {/* ============ 标签页 ============ */}
+      <div className="flex items-end h-9 px-1 shrink-0 border-b border-stroke/60">
+        <div className="flex items-end h-full overflow-x-auto min-w-0 flex-1">
           {tabs.map((t) => (
             <TabItem
               key={t.id}
@@ -426,157 +592,55 @@ export default function App() {
           ))}
           <button
             onClick={newTab}
-            className="w-7 h-7 flex items-center justify-center rounded-sm text-ink-secondary hover:bg-smoke-bg-card-hover shrink-0"
+            title="新建标签 (Ctrl+N)"
+            className="w-7 h-7 mb-0.5 ml-0.5 flex items-center justify-center rounded-sm text-ink-secondary hover:bg-smoke-bg-card-hover shrink-0"
           >
             <Icon name="plus" size={13} />
           </button>
         </div>
-
-        <div className="flex-1" data-tauri-drag-region />
-
-        {/* 窗口控制 */}
-        <div className="flex items-stretch h-10">
-          <button
-            onClick={() => void windowAction("minimize")}
-            className="w-11 h-10 flex items-center justify-center text-ink-secondary hover:bg-smoke-bg-card-hover"
-          >
-            <Icon name="minimize" size={12} />
-          </button>
-          <button
-            onClick={() => void windowAction("maximize")}
-            className="w-11 h-10 flex items-center justify-center text-ink-secondary hover:bg-smoke-bg-card-hover"
-          >
-            <Icon name="maximize" size={11} />
-          </button>
-          <button
-            onClick={() => void windowAction("close")}
-            className="w-11 h-10 flex items-center justify-center text-ink-secondary hover:bg-danger hover:text-white"
-          >
-            <Icon name="close" size={12} />
-          </button>
-        </div>
-      </header>
-
-      {/* ============ 主体 ============ */}
-      <div className="flex-1 flex min-h-0">
-        {/* 左侧导航 */}
-        <nav className="w-44 shrink-0 border-r border-stroke/60 py-2 px-1.5 flex flex-col gap-0.5">
-          {NAV_ITEMS.map((item) => (
-            <button
-              key={item.id}
-              onClick={() => setPage(item.id)}
-              className={`relative flex items-center gap-2.5 px-2.5 h-9 rounded-md text-[13px] transition-colors duration-150 ${
-                page === item.id
-                  ? "bg-smoke-bg-card text-ink font-medium"
-                  : "text-ink-secondary hover:bg-smoke-bg-card-hover"
-              }`}
-            >
-              {page === item.id && (
-                <span className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-4 rounded-full bg-accent" />
-              )}
-              <Icon name={item.icon} size={16} />
-              {item.label}
-            </button>
-          ))}
-
-          <div className="flex-1" />
-
-          {/* 主题切换 */}
-          <button
-            onClick={() => {
-              const next = theme === "dark" ? "light" : "dark";
-              void useSettingsStore.getState().patch({ theme: next });
-              useSettingsStore.setState((s) => ({ settings: { ...s.settings, theme: next } }));
-            }}
-            className="flex items-center gap-2.5 px-2.5 h-9 rounded-md text-[13px] text-ink-secondary hover:bg-smoke-bg-card-hover"
-          >
-            <Icon name={theme === "dark" ? "moon" : "sun"} size={16} />
-            {theme === "dark" ? "深色模式" : "浅色模式"}
-          </button>
-        </nav>
-
-        {/* 内容区 */}
-        <main className="flex-1 min-w-0 flex flex-col">
-          {page === "editor" && <EditorPage onOpen={() => void handleOpen()} />}
-
-          {page === "viewer" && (
-            <>
-              {/* 工具条（查看器只读展示；空白文档时隐藏，只留打开入口） */}
-              {!isDocEmpty && (
-                <div className="flex items-center gap-2 px-3 py-2 border-b border-stroke/60 shrink-0">
-                  <SegmentedControl
-                    value={view}
-                    onChange={(v) => setView(v as ViewMode)}
-                    options={viewsFor(fileKind)}
-                  />
-                  <div className="w-px h-5 bg-stroke" />
-                  <Button icon="open" onClick={() => void handleOpen()}>
-                    打开文件
-                  </Button>
-                  <Tooltip text="保存 (Ctrl+S)">
-                    <Button icon="save" variant="accent" onClick={() => void saveFile()}>
-                      保存
-                    </Button>
-                  </Tooltip>
-                  <div className="flex-1" />
-                  {fileKind === "json" && (
-                    <>
-                      <select
-                        value={parseMode}
-                        onChange={(e) => setParseMode(e.target.value as typeof parseMode)}
-                        className="h-8 rounded-sm border border-stroke-strong bg-smoke-bg-layer text-ink text-[12px] px-2"
-                      >
-                        <option value="strict">严格 JSON</option>
-                        <option value="jsonc">JSONC（注释/尾逗号）</option>
-                        <option value="jsonl">JSONL（逐行）</option>
-                      </select>
-                      <Button icon="refresh" onClick={() => void reparse()}>
-                        重新解析
-                      </Button>
-                    </>
-                  )}
-                </div>
-              )}
-
-              {/* 视图（只读；空白文档只显示打开入口；按文件类型展示对应标签页） */}
-              <div className="flex-1 min-h-0">
-                {isDocEmpty ? (
-                  <EmptyState onOpen={() => void handleOpen()} />
-                ) : parsing && !result ? (
-                  <div className="flex items-center justify-center h-full text-ink-tertiary">
-                    解析中…
-                  </div>
-                ) : fileKind === "json" ? (
-                  view === "tree" ? (
-                    <TreeView />
-                  ) : view === "table" ? (
-                    <TableView />
-                  ) : (
-                    <RawView />
-                  )
-                ) : fileKind === "markdown" ? (
-                  view === "preview" ? (
-                    <MarkdownPreview />
-                  ) : (
-                    <RawView />
-                  )
-                ) : fileKind === "ini" ? (
-                  view === "structure" ? (
-                    <IniView />
-                  ) : (
-                    <RawView />
-                  )
-                ) : (
-                  <RawView />
-                )}
-              </div>
-            </>
-          )}
-
-          {page === "query" && <QueryPanel />}
-          {page === "settings" && <SettingsPage />}
-        </main>
       </div>
+
+      {/* ============ 内容区 ============ */}
+      <main className="flex-1 min-w-0 min-h-0 flex flex-col">
+        {page === "editor" && <EditorPage />}
+
+        {page === "viewer" && (
+          <div className="flex-1 min-h-0">
+            {isDocEmpty ? (
+              <EmptyState onOpen={() => void handleOpen()} />
+            ) : parsing && !result ? (
+              <div className="flex items-center justify-center h-full text-ink-tertiary">
+                解析中…
+              </div>
+            ) : fileKind === "json" ? (
+              view === "tree" ? (
+                <TreeView />
+              ) : view === "table" ? (
+                <TableView />
+              ) : (
+                <RawView />
+              )
+            ) : fileKind === "markdown" ? (
+              view === "preview" ? (
+                <MarkdownPreview />
+              ) : (
+                <RawView />
+              )
+            ) : fileKind === "ini" ? (
+              view === "structure" ? (
+                <IniView />
+              ) : (
+                <RawView />
+              )
+            ) : (
+              <RawView />
+            )}
+          </div>
+        )}
+
+        {page === "query" && <QueryPanel />}
+        {page === "settings" && <SettingsPage />}
+      </main>
 
       {/* ============ 状态栏 ============ */}
       <footer className="h-7 flex items-center gap-4 px-4 text-[11px] text-ink-secondary border-t border-stroke/60 shrink-0">
@@ -618,14 +682,59 @@ export default function App() {
         <span className="flex-1 text-center text-ink-tertiary truncate">{statusMessage}</span>
         <span className="truncate max-w-[260px]">{activeTab?.path ?? activeTab?.name}</span>
       </footer>
+
+      {/* ============ 关于 ============ */}
+      <Dialog
+        open={aboutOpen}
+        title="关于 FileView"
+        onClose={() => setAboutOpen(false)}
+        footer={
+          <button
+            onClick={() => setAboutOpen(false)}
+            className="px-4 h-8 rounded-sm text-[13px] font-medium bg-accent text-ink-on-accent hover:bg-accent-hover"
+          >
+            确定
+          </button>
+        }
+      >
+        <div className="space-y-1.5">
+          <div className="text-[13px] font-medium text-ink">FileView v0.1.0</div>
+          <div>Windows 11 Fluent 风格的多格式文件查看器与编辑器。</div>
+          <div>支持 JSON / JSONL / Markdown / INI / 日志 / 文本文件。</div>
+          <div className="text-ink-tertiary">
+            提示：按住标签页拖动（或长按后拖出），即可将文档分离为独立窗口。
+          </div>
+        </div>
+      </Dialog>
     </div>
   );
 }
 
-/** 长按多久后进入「可拖出」状态 */
+const ToolButton: React.FC<{
+  icon: string;
+  title: string;
+  onClick: () => void;
+  disabled?: boolean;
+}> = ({ icon, title, onClick, disabled }) => (
+  <Tooltip text={title}>
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className="w-8 h-8 flex items-center justify-center rounded-sm text-ink-secondary hover:bg-smoke-bg-card-hover hover:text-ink disabled:opacity-35 disabled:pointer-events-none transition-colors duration-100"
+    >
+      <Icon name={icon} size={15} />
+    </button>
+  </Tooltip>
+);
+
+const ToolDivider: React.FC = () => <div className="w-px h-5 bg-stroke mx-1 shrink-0" />;
+
+/** 按住不动多久后进入长按提示状态 */
 const LONG_PRESS_MS = 420;
-/** 进入可拖出状态后，移动多远才算真正拖出 */
+/** 长按后移动多远开始拖出 */
 const DRAG_THRESHOLD = 14;
+/** 未长按、直接按住拖动时，移动多远触发分离（避免误触） */
+const DRAG_OUT_THRESHOLD = 28;
 
 function TabItem({
   tab,
@@ -643,9 +752,10 @@ function TabItem({
   const [holding, setHolding] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [hint, setHint] = useState<{ x: number; y: number } | null>(null);
+  const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null);
   const press = useRef<{ x: number; y: number; timer: number; moved: boolean } | null>(null);
   const holdingRef = useRef(false);
-  /** 最近一次长按结束的时间戳：用于吞掉紧随其后的 click */
+  /** 最近一次长按/拖出的时间戳：用于吞掉紧随其后的 click */
   const suppressClickAt = useRef(0);
 
   const reset = () => {
@@ -656,6 +766,20 @@ function TabItem({
     setDragging(false);
     setHint(null);
   };
+
+  useEffect(() => {
+    if (!menuAt) return;
+    const close = () => setMenuAt(null);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") close();
+    };
+    window.addEventListener("mousedown", close);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", close);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [menuAt]);
 
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
@@ -673,16 +797,15 @@ function TabItem({
     const p = press.current;
     if (!p) return;
     const dist = Math.hypot(e.clientX - p.x, e.clientY - p.y);
-    if (holdingRef.current) {
-      if (dist > DRAG_THRESHOLD && !p.moved) {
+    // 长按后小幅移动即可拖出；直接拖动则需要更明显的位移
+    const threshold = holdingRef.current ? DRAG_THRESHOLD : DRAG_OUT_THRESHOLD;
+    if (dist > threshold) {
+      if (!p.moved) {
         p.moved = true;
+        window.clearTimeout(p.timer);
         setDragging(true);
       }
-      if (p.moved) setHint({ x: e.clientX, y: e.clientY });
-    } else if (dist > 10) {
-      // 未进入长按就移动：取消长按，保留普通点击
-      window.clearTimeout(p.timer);
-      press.current = null;
+      setHint({ x: e.clientX, y: e.clientY });
     }
   };
 
@@ -690,7 +813,7 @@ function TabItem({
     const moved = press.current?.moved ?? false;
     const held = holdingRef.current;
     reset();
-    if (held) suppressClickAt.current = Date.now();
+    if (held || moved) suppressClickAt.current = Date.now();
     if (moved) onDetach();
   };
 
@@ -701,11 +824,15 @@ function TabItem({
           if (Date.now() - suppressClickAt.current < 600) return;
           onActivate();
         }}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          setMenuAt({ x: e.clientX, y: e.clientY });
+        }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={reset}
-        title="长按并拖出，可分离为独立窗口"
+        title="按住拖动或长按拖出，可分离为独立窗口"
         className={`group relative flex items-center gap-1.5 px-3 h-8 mx-0.5 rounded-t-md text-[12px] max-w-[180px] select-none touch-none transition-shadow ${
           dragging
             ? "cursor-grabbing opacity-60"
@@ -735,12 +862,41 @@ function TabItem({
           <Icon name="close" size={10} />
         </button>
       </div>
-      {holding && hint && (
+      {(holding || dragging) && hint && (
         <div
           className="fixed z-[999] pointer-events-none rounded-md border border-stroke bg-smoke-bg-card px-2 py-1 text-[11px] text-ink shadow-lg"
           style={{ left: hint.x + 14, top: hint.y + 14 }}
         >
           {dragging ? "松开即可分离为独立窗口" : "拖动标签页，可分离为独立窗口"}
+        </div>
+      )}
+      {menuAt && (
+        <div
+          className="fixed z-[999] min-w-[180px] py-1 rounded-md border border-stroke bg-smoke-bg-layer shadow-flyout text-[12px]"
+          style={{ left: menuAt.x, top: menuAt.y }}
+        >
+          <button
+            onMouseDown={(e) => {
+              e.stopPropagation();
+              setMenuAt(null);
+              onClose();
+            }}
+            className="w-full flex items-center gap-2 px-2.5 h-7 text-left text-ink hover:bg-smoke-bg-card-hover"
+          >
+            <Icon name="close" size={11} />
+            关闭标签页
+          </button>
+          <button
+            onMouseDown={(e) => {
+              e.stopPropagation();
+              setMenuAt(null);
+              onDetach();
+            }}
+            className="w-full flex items-center gap-2 px-2.5 h-7 text-left text-ink hover:bg-smoke-bg-card-hover"
+          >
+            <Icon name="external" size={11} />
+            分离为独立窗口
+          </button>
         </div>
       )}
     </>
