@@ -8,10 +8,26 @@
 
 use super::registry;
 
-/// 支持的扩展名（JSON 家族 + 文档/配置/日志文本）
+/// 支持的扩展名（JSON 家族 + 文档 + 配置 + 数据 + 标记语言 + 源码）
 pub const SUPPORTED_EXTS: &[&str] = &[
-    "json", "jsonc", "jsonl", "ndjson", "har", "geojson", "md", "markdown", "ini", "cfg", "conf",
-    "txt", "log",
+    // JSON 家族
+    "json", "jsonc", "json5", "jsonl", "ndjson", "har", "geojson", "webmanifest",
+    // 文档与文本
+    "md", "markdown", "mdown", "txt", "text", "log",
+    // 配置
+    "ini", "cfg", "conf", "config", "properties", "props", "env", "editorconfig",
+    "gitignore", "npmrc", "yaml", "yml", "toml",
+    // 数据
+    "csv", "tsv",
+    // 标记语言
+    "xml", "svg", "html", "htm", "xhtml", "vue", "svelte",
+    // 前端
+    "css", "scss", "less", "js", "mjs", "cjs", "jsx", "ts", "tsx",
+    // 脚本与后端
+    "py", "rb", "php", "java", "kt", "kts", "swift", "rs", "go", "c", "h", "cpp", "cc",
+    "cxx", "hpp", "cs", "lua", "pl", "dart", "scala", "r",
+    // 脚本与数据库
+    "sh", "bash", "zsh", "ps1", "bat", "cmd", "sql",
 ];
 
 const APP_DISPLAY_NAME: &str = "FileView";
@@ -27,7 +43,7 @@ fn refresh_capabilities() -> Result<(), String> {
     let key = registry::create_key(&caps_path).map_err(|e| format!("创建 Capabilities 失败: {}", e))?;
     registry::set_string(&key, "ApplicationName", APP_DISPLAY_NAME)
         .map_err(|e| format!("写 ApplicationName 失败: {}", e))?;
-    registry::set_string(&key, "ApplicationDescription", "JSON / Markdown / 配置 / 文本查看器")
+    registry::set_string(&key, "ApplicationDescription", "JSON / Markdown / YAML / TOML / CSV / XML / 代码 / 文本查看器")
         .map_err(|e| format!("写 ApplicationDescription 失败: {}", e))?;    let fa = registry::create_key(format!(r"{}\FileAssociations", caps_path))
         .map_err(|e| format!("创建 FileAssociations 失败: {}", e))?;
     for ext in SUPPORTED_EXTS {

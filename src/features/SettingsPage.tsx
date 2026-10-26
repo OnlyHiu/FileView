@@ -15,7 +15,7 @@ import {
   Badge,
   Dialog,
 } from "../components/ui";
-import { MENU_TARGETS, SUPPORTED_EXTS, type Settings } from "../lib/types";
+import { MENU_TARGETS, EXT_GROUPS, type Settings } from "../lib/types";
 import { isTauri } from "../lib/api";
 
 export const SettingsPage: React.FC = () => {
@@ -185,8 +185,7 @@ export const SettingsPage: React.FC = () => {
               description={t.desc}
             />
           ))}
-        </div>
-        <div className="flex gap-2 mt-3">
+        </div>        <div className="flex gap-2 mt-3">
           <Button
             variant="accent"
             icon="link"
@@ -216,14 +215,21 @@ export const SettingsPage: React.FC = () => {
           Windows 通过用户确认（UserChoice 哈希保护）决定默认应用，程序无法直接改写。
           勾选扩展名完成注册后，点击下方按钮在系统设置中一键确认 FileView 为默认应用。
         </InfoBar>
-        <div className="grid grid-cols-3 gap-x-4">
-          {SUPPORTED_EXTS.map((ext) => (
-            <Checkbox
-              key={ext}
-              checked={extSelected.has(ext) || extOnMap.get(ext) === true}
-              onChange={() => toggleExt(ext)}
-              label={`.${ext}`}
-            />
+        <div className="space-y-2">
+          {EXT_GROUPS.map((g) => (
+            <div key={g.label}>
+              <div className="text-[11px] text-ink-tertiary mb-0.5">{g.label}</div>
+              <div className="flex flex-wrap gap-x-3">
+                {g.exts.map((ext) => (
+                  <Checkbox
+                    key={ext}
+                    checked={extSelected.has(ext) || extOnMap.get(ext) === true}
+                    onChange={() => toggleExt(ext)}
+                    label={`.${ext}`}
+                  />
+                ))}
+              </div>
+            </div>
           ))}
         </div>
         <div className="flex gap-2 mt-3">
@@ -299,12 +305,13 @@ export const SettingsPage: React.FC = () => {
       <Card
         icon="info"
         title="FileView"
-        description="v0.1.0 · Tauri 2 + React + Vite + Tailwind CSS"
+        description="v0.2.0 · Tauri 2 + React + Vite + Tailwind CSS"
       >
         <div className="text-[12px] text-ink-secondary leading-5">
           Windows 11 Fluent 风格的多格式文件查看与编辑器。支持 JSON / JSONC / JSONL、Markdown、
-          INI 配置、日志与纯文本；提供树形 / 表格 / 原始 / 预览 / 结构多视图、JSONPath 查询、
-          语法诊断、编辑保存与系统集成。
+          YAML、TOML、CSV、XML、HTML、INI、代码文件、日志与纯文本；文档区默认显示文本，
+          「查看工具」面板提供树形 / 表格 / 预览 / 结构视图，并支持 JSONPath 查询、语法诊断、
+          编辑保存与 Windows 系统集成。
         </div>
       </Card>
 

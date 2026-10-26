@@ -44,6 +44,11 @@
   --syn-timestamp: #7a5c00;
   --syn-log-info: #098658;
   --syn-log-debug: #6a737d;
+  --syn-keyword: #0000ff;
+  --syn-func: #795e26;
+  --syn-type: #267f99;
+  --syn-attr: #e50000;
+  --syn-tag: #800000;
 
   --focus-ring: 0 0 0 2px var(--smoke-bg-layer), 0 0 0 4px var(--accent);
   --mica-tint: rgba(243, 243, 243, 0.5);
@@ -87,9 +92,14 @@
   --syn-link: #9cdcfe;
   --syn-quote: #9ca3af;
   --syn-section: #c586c0;
-  --syn-timestamp: #b5cea8;
+  --syn-timestamp: #dcdcaa;
   --syn-log-info: #4ec9b0;
   --syn-log-debug: #9ca3af;
+  --syn-keyword: #569cd6;
+  --syn-func: #dcdcaa;
+  --syn-type: #4ec9b0;
+  --syn-attr: #9cdcfe;
+  --syn-tag: #569cd6;
 
   --focus-ring: 0 0 0 2px var(--smoke-bg-layer), 0 0 0 4px var(--accent);
   --mica-tint: rgba(32, 32, 32, 0.5);
@@ -179,9 +189,14 @@ body {
 .syn-keyname { color: var(--syn-key); }
 .syn-timestamp { color: var(--syn-timestamp); }
 .syn-log-error { color: var(--danger); font-weight: 600; }
-.syn-log-warn { color: var(--warning); font-weight: 600; }
+.syn-log-warn { color: var(--syn-timestamp); font-weight: 600; }
 .syn-log-info { color: var(--syn-log-info); }
 .syn-log-debug { color: var(--syn-log-debug); }
+.syn-keyword { color: var(--syn-keyword); }
+.syn-func { color: var(--syn-func); }
+.syn-type { color: var(--syn-type); }
+.syn-attr { color: var(--syn-attr); }
+.syn-tag { color: var(--syn-tag); }
 
 /* 内容视图字号（由设置 fontSize 驱动）与等比行高 */
 :root {

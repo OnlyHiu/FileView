@@ -1,29 +1,53 @@
-// 应用主壳：自定义标题栏 + 导航 + 内容区 + 状态栏
+// 应用主壳：标题栏 + 菜单栏 + 工具栏 + 标签栏 + 文档区（+ 可停靠工具面板）+ 状态栏
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useJsonStore, type Page, type ViewMode } from "./stores/jsonStore";
+import { useJsonStore } from "./stores/jsonStore";
 import { useSettingsStore } from "./stores/settingsStore";
 import { Icon, SegmentedControl, Tooltip, Dialog } from "./components/ui";
 import { MenuBar } from "./components/MenuBar";
+import { SidePanel } from "./components/SidePanel";
 import { TreeView } from "./features/TreeView";
 import { TableView } from "./features/TableView";
 import { RawView } from "./features/RawView";
 import { MarkdownPreview } from "./features/MarkdownPreview";
 import { IniView } from "./features/IniView";
+import { CsvView } from "./features/CsvView";
+import { KeyValueView } from "./features/KeyValueView";
+import { XmlView } from "./features/XmlView";
+import { HtmlPreview } from "./features/HtmlPreview";
+import { OutlineView } from "./features/OutlineView";
 import { EmptyState } from "./features/EmptyState";
-import { EditorPage } from "./features/EditorPage";
+import { SourceEditor } from "./features/SourceEditor";
+import { FindBar } from "./features/FindBar";
 import { QueryPanel } from "./features/QueryPanel";
 import { SettingsPage } from "./features/SettingsPage";
-import { isTauri, openFilePicker, readFileText, getFileMtime, takeStartupFile, detachTabToWindow } from "./lib/api";
+import {
+  isTauri,
+  openFilePicker,
+  readFileText,
+  getFileMtime,
+  takeStartupFile,
+  detachTabToWindow,
+} from "./lib/api";
 import { getDiskBaseline, isTabDirty } from "./stores/jsonStore";
-import { viewsFor, kindLabel, type Tab } from "./lib/types";
+import {
+  viewsFor,
+  kindLabel,
+  langFromPath,
+  type ParseMode,
+  type Tab,
+  type ViewMode,
+} from "./lib/types";
 
 /** 分离窗口只应消费一次负载（React StrictMode 下 effect 会执行两次） */
 let detachPayloadHandled = false;
 
+const APP_VERSION = "0.2.0";
+
 export default function App() {
-  const page = useJsonStore((s) => s.page);
-  const setPage = useJsonStore((s) => s.setPage);
+  const panel = useJsonStore((s) => s.panel);
+  const setPanel = useJsonStore((s) => s.setPanel);
+  const togglePanel = useJsonStore((s) => s.togglePanel);
   const view = useJsonStore((s) => s.view);
   const setView = useJsonStore((s) => s.setView);
   const tabs = useJsonStore((s) => s.tabs);
@@ -36,19 +60,34 @@ export default function App() {
   const applyFormat = useJsonStore((s) => s.applyFormat);
   const applyMinify = useJsonStore((s) => s.applyMinify);
   const applySort = useJsonStore((s) => s.applySort);
+  const escapeString = useJsonStore((s) => s.escapeString);
+  const unescapeString = useJsonStore((s) => s.unescapeString);
+  const undo = useJsonStore((s) => s.undo);
+  const redo = useJsonStore((s) => s.redo);
+  const saveFile = useJsonStore((s) => s.saveFile);
+  const saveFileAs = useJsonStore((s) => s.saveFileAs);
   const result = useJsonStore((s) => s.result);
   const parsing = useJsonStore((s) => s.parsing);
   const statusMessage = useJsonStore((s) => s.statusMessage);
   const parseMode = useJsonStore((s) => s.parseMode);
   const setParseMode = useJsonStore((s) => s.setParseMode);
+  const setEditorText = useJsonStore((s) => s.setEditorText);
   const fileKind = useJsonStore((s) => s.fileKind);
-  const saveFile = useJsonStore((s) => s.saveFile);
+  const findOpen = useJsonStore((s) => s.findOpen);
+  const openFind = useJsonStore((s) => s.openFind);
+  const closeFind = useJsonStore((s) => s.closeFind);
+  const findQuery = useJsonStore((s) => s.findQuery);
+  const findMatches = useJsonStore((s) => s.findMatches);
+  const findIndex = useJsonStore((s) => s.findIndex);
+  const findNext = useJsonStore((s) => s.findNext);
 
   const settings = useSettingsStore((s) => s.settings);
   const loadSettings = useSettingsStore((s) => s.load);
 
   const [theme, setTheme] = useState<"light" | "dark">("light");
   const [aboutOpen, setAboutOpen] = useState(false);
+  const [panelWidth, setPanelWidth] = useState(460);
+  const [revealNonce, setRevealNonce] = useState(0);
 
   // ============ 启动：主题 → 载入文档 → 显示窗口（避免启动白闪） ============
   const revealedRef = useRef(false);
@@ -281,6 +320,23 @@ export default function App() {
   }, [loadFile]);
 
   // ============ 文件打开 ============
+  const openPath = useCallback(
+    async (path: string) => {
+      try {
+        const payload = await readFileText(path);
+        loadFile(payload.path, payload.text);
+        if (payload.truncated) {
+          useJsonStore
+            .getState()
+            .setStatus(`文件超过 64MB，仅加载了前面部分，统计与视图不完整`);
+        }
+      } catch (e) {
+        useJsonStore.getState().setStatus(`打开文件失败: ${e}`);
+      }
+    },
+    [loadFile]
+  );
+
   const handleOpen = useCallback(async () => {
     try {
       const payload = await openFilePicker();
@@ -356,36 +412,91 @@ export default function App() {
     useSettingsStore.setState((s) => ({ settings: { ...s.settings, theme: next } }));
   }, [theme]);
 
+  const zoomFont = useCallback((delta: number) => {
+    const next = Math.min(20, Math.max(11, settings.fontSize + delta));
+    void useSettingsStore.getState().patch({ fontSize: next });
+    useSettingsStore.setState((s) => ({ settings: { ...s.settings, fontSize: next } }));
+  }, [settings.fontSize]);
+
+  // 关闭面板：查找栏打开时优先关闭查找栏
+  const closePanel = useCallback(() => {
+    if (findOpen) closeFind();
+    else setPanel("none");
+  }, [findOpen, closeFind, setPanel]);
+
   // ============ 快捷键 ============
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.ctrlKey && e.key.toLowerCase() === "o") {
+      const ctrl = e.ctrlKey || e.metaKey;
+      const key = e.key.toLowerCase();
+      if (ctrl && key === "o") {
         e.preventDefault();
         void handleOpen();
-      } else if (e.ctrlKey && e.key.toLowerCase() === "s") {
+      } else if (ctrl && e.shiftKey && key === "s") {
+        e.preventDefault();
+        void saveFileAs();
+      } else if (ctrl && key === "s") {
         e.preventDefault();
         void saveFile();
-      } else if (e.ctrlKey && e.key.toLowerCase() === "n") {
+      } else if (ctrl && key === "n") {
         e.preventDefault();
         newTab();
-      } else if (e.ctrlKey && e.key.toLowerCase() === "w") {
+      } else if (ctrl && key === "w") {
         e.preventDefault();
         const id = useJsonStore.getState().activeTabId;
         if (id !== null) closeTab(id);
-      } else if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "f") {
+      } else if (ctrl && e.shiftKey && key === "f") {
         e.preventDefault();
         void applyFormat();
-      } else if (e.ctrlKey && e.key.toLowerCase() === "f") {
+      } else if (ctrl && key === "f") {
         e.preventDefault();
-        setPage("query");
+        openFind();
+      } else if (ctrl && key === "g") {
+        e.preventDefault();
+        togglePanel("query");
+      } else if (ctrl && key === "b") {
+        e.preventDefault();
+        togglePanel("viewer");
+      } else if (ctrl && key === ",") {
+        e.preventDefault();
+        togglePanel("settings");
+      } else if (ctrl && key === "z") {
+        e.preventDefault();
+        undo();
+      } else if (ctrl && key === "y") {
+        e.preventDefault();
+        redo();
+      } else if (ctrl && (key === "=" || key === "+")) {
+        e.preventDefault();
+        zoomFont(1);
+      } else if (ctrl && key === "-") {
+        e.preventDefault();
+        zoomFont(-1);
       } else if (e.key === "F5") {
         e.preventDefault();
         void reparse();
+      } else if (e.key === "F3") {
+        e.preventDefault();
+        findNext();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [handleOpen, setPage, reparse, applyFormat, saveFile, newTab, closeTab]);
+  }, [
+    handleOpen,
+    reparse,
+    applyFormat,
+    saveFile,
+    saveFileAs,
+    newTab,
+    closeTab,
+    openFind,
+    findNext,
+    togglePanel,
+    undo,
+    redo,
+    zoomFont,
+  ]);
 
   // ============ 拖拽打开 ============
   useEffect(() => {
@@ -396,23 +507,12 @@ export default function App() {
       unlisten = await getCurrentWindow().onDragDropEvent((event) => {
         if (event.payload.type === "drop") {
           const path = event.payload.paths[0];
-          if (path) {
-            void readFileText(path)
-              .then((p) => {
-                loadFile(p.path, p.text);
-                if (p.truncated) {
-                  useJsonStore
-                    .getState()
-                    .setStatus(`文件超过 64MB，仅加载了前面部分，统计与视图不完整`);
-                }
-              })
-              .catch((e) => useJsonStore.getState().setStatus(`打开文件失败: ${e}`));
-          }
+          if (path) void openPath(path);
         }
       });
     })();
     return () => unlisten?.();
-  }, [loadFile]);
+  }, [openPath]);
 
   // ============ 窗口控制 ============
   const windowAction = async (action: "minimize" | "maximize" | "close") => {
@@ -435,19 +535,90 @@ export default function App() {
   const textBytes = textStats.bytes;
   const isDocEmpty = activeText.trim() === "";
 
+  // JSON 诊断 → 出错行
+  const errorLines = useMemo(() => {
+    const map = new Map<number, string>();
+    if (fileKind !== "json") return map;
+    for (const d of result?.diagnostics ?? []) {
+      if (d.severity === "error") map.set(d.line, d.message);
+    }
+    return map;
+  }, [result, fileKind]);
+
+  // 查找定位：命中下标变化时刷新定位序号
+  useEffect(() => {
+    if (!findOpen || findIndex < 0) return;
+    setRevealNonce((n) => n + 1);
+  }, [findOpen, findIndex, findQuery]);
+
+  const revealTarget =
+    findOpen && findIndex >= 0 && findMatches[findIndex] !== undefined
+      ? {
+          start: findMatches[findIndex],
+          end: findMatches[findIndex] + findQuery.length,
+          nonce: revealNonce,
+        }
+      : null;
+
+  const isJson = fileKind === "json";
+
+  // 面板内容
+  const panelBody = (() => {
+    if (panel === "query") return <QueryPanel />;
+    if (panel === "settings") return <SettingsPage />;
+    // viewer
+    if (isDocEmpty) {
+      return (
+        <div className="h-full flex items-center justify-center text-[12px] text-ink-tertiary px-4 text-center">
+          空白文档，打开文件后即可使用查看工具
+        </div>
+      );
+    }
+    if (parsing && !result) {
+      return (
+        <div className="h-full flex items-center justify-center text-ink-tertiary">解析中…</div>
+      );
+    }
+    switch (fileKind) {
+      case "json":
+        if (view === "tree") return <TreeView />;
+        if (view === "table") return <TableView />;
+        return <RawView readOnly />;
+      case "markdown":
+        return view === "preview" ? <MarkdownPreview /> : <RawView readOnly />;
+      case "ini":
+        return view === "structure" ? <IniView /> : <RawView readOnly />;
+      case "yaml":
+      case "toml":
+        return view === "structure" ? <KeyValueView /> : <RawView readOnly />;
+      case "csv":
+        return view === "table" ? <CsvView /> : <RawView readOnly />;
+      case "xml":
+        return view === "structure" ? <XmlView /> : <RawView readOnly />;
+      case "html":
+        return view === "preview" ? <HtmlPreview /> : <RawView readOnly />;
+      case "code":
+        return view === "structure" ? <OutlineView /> : <RawView readOnly />;
+      default:
+        return <RawView readOnly />;
+    }
+  })();
+
+  const panelTitle =
+    panel === "query" ? "JSONPath 查询" : panel === "settings" ? "设置" : "查看工具";
+
   return (
     <div className={`h-full flex flex-col ${settings.mica ? "mica-bg" : ""} text-ink`}>
       {/* ============ 标题栏 ============ */}
       <header
         data-tauri-drag-region
-        className="h-9 flex items-center pl-3 pr-0 select-none shrink-0"
+        className="h-8 flex items-center pl-3 pr-0 select-none shrink-0"
       >
         <div className="flex items-center gap-2 min-w-0" data-tauri-drag-region>
-          <img
-            src={isTauri() ? "icon.png" : undefined}
-            alt=""
-            className="w-4 h-4 shrink-0"
-            onError={(e) => ((e.target as HTMLImageElement).style.display = "none")}
+          <span
+            className="w-1.5 h-1.5 rounded-sm bg-accent shrink-0"
+            data-tauri-drag-region
+            title="FileView"
           />
           <span className="text-[12px] font-medium text-ink-secondary shrink-0" data-tauri-drag-region>
             FileView
@@ -465,22 +636,22 @@ export default function App() {
         <div className="flex-1" data-tauri-drag-region />
 
         {/* 窗口控制 */}
-        <div className="flex items-stretch h-9">
+        <div className="flex items-stretch h-8">
           <button
             onClick={() => void windowAction("minimize")}
-            className="w-11 h-9 flex items-center justify-center text-ink-secondary hover:bg-smoke-bg-card-hover"
+            className="w-11 h-8 flex items-center justify-center text-ink-secondary hover:bg-smoke-bg-card-hover"
           >
             <Icon name="minimize" size={12} />
           </button>
           <button
             onClick={() => void windowAction("maximize")}
-            className="w-11 h-9 flex items-center justify-center text-ink-secondary hover:bg-smoke-bg-card-hover"
+            className="w-11 h-8 flex items-center justify-center text-ink-secondary hover:bg-smoke-bg-card-hover"
           >
             <Icon name="maximize" size={11} />
           </button>
           <button
             onClick={() => void windowAction("close")}
-            className="w-11 h-9 flex items-center justify-center text-ink-secondary hover:bg-danger hover:text-white"
+            className="w-11 h-8 flex items-center justify-center text-ink-secondary hover:bg-danger hover:text-white"
           >
             <Icon name="close" size={12} />
           </button>
@@ -489,32 +660,45 @@ export default function App() {
 
       {/* ============ 菜单栏 ============ */}
       <MenuBar
-        page={page}
+        hasTab={!!activeTab}
+        isJson={isJson}
+        theme={theme}
+        panel={panel}
         view={view}
         fileKind={fileKind}
-        theme={theme}
-        hasTab={!!activeTab}
-        isJson={fileKind === "json"}
+        parseMode={parseMode}
+        recentFiles={settings.recentFiles ?? []}
         onNewTab={newTab}
         onOpen={() => void handleOpen()}
         onSave={() => void saveFile()}
+        onSaveAs={() => void saveFileAs()}
         onCloseTab={() => activeTab && closeTab(activeTab.id)}
+        onOpenRecent={(path) => void openPath(path)}
         onFormat={() => void applyFormat()}
         onMinify={() => void applyMinify()}
         onSort={() => void applySort()}
+        onEscapeString={() => escapeString()}
+        onUnescapeString={() => unescapeString()}
+        onParseMode={(m: ParseMode) => setParseMode(m)}
         onReparse={() => void reparse()}
         onCopyText={() => void copyAllText()}
         onCopyPath={() => void copyFilePath()}
+        onFind={openFind}
+        onFindNext={findNext}
+        onQueryPanel={() => togglePanel("query")}
         onDetach={handleDetachActive}
         onQuit={() => void windowAction("close")}
-        onAbout={() => setAboutOpen(true)}
-        onPage={setPage}
-        onView={setView}
+        onUndo={undo}
+        onRedo={redo}
+        onTogglePanel={togglePanel}
+        onView={(v: ViewMode) => setView(v)}
         onToggleTheme={toggleTheme}
+        onZoom={zoomFont}
+        onAbout={() => setAboutOpen(true)}
       />
 
       {/* ============ 工具栏 ============ */}
-      <div className="flex items-center gap-1 px-2 h-10 border-b border-stroke/60 shrink-0">
+      <div className="flex items-center gap-0.5 px-2 h-10 border-b border-stroke/60 shrink-0">
         <ToolButton icon="plus" title="新建标签 (Ctrl+N)" onClick={newTab} />
         <ToolButton icon="open" title="打开文件 (Ctrl+O)" onClick={() => void handleOpen()} />
         <ToolButton
@@ -525,30 +709,20 @@ export default function App() {
         />
         <ToolDivider />
         <ToolButton
-          icon="refresh"
-          title="重新解析 (F5)"
-          onClick={() => void reparse()}
+          icon="search"
+          title="查找 (Ctrl+F)"
+          onClick={openFind}
           disabled={!activeTab}
         />
-        <ToolButton
-          icon="code"
-          title="格式化 (Ctrl+Shift+F)"
-          onClick={() => void applyFormat()}
-          disabled={!activeTab || fileKind !== "json"}
-        />
-        <ToolButton
-          icon="play"
-          title="压缩 JSON"
-          onClick={() => void applyMinify()}
-          disabled={!activeTab || fileKind !== "json"}
-        />
-        <ToolButton
-          icon="copy"
-          title="键排序"
-          onClick={() => void applySort()}
-          disabled={!activeTab || fileKind !== "json"}
-        />
+        <ToolButton icon="undo" title="撤销 (Ctrl+Z)" onClick={undo} disabled={!activeTab} />
+        <ToolButton icon="redo" title="重做 (Ctrl+Y)" onClick={redo} disabled={!activeTab} />
         <ToolDivider />
+        <ToolButton
+          icon="tree"
+          title="查看工具 (Ctrl+B)"
+          onClick={() => togglePanel("viewer")}
+          active={panel === "viewer"}
+        />
         <ToolButton
           icon="external"
           title="将当前标签分离为独立窗口"
@@ -556,17 +730,10 @@ export default function App() {
           disabled={!activeTab}
         />
         <div className="flex-1" />
-        {page === "viewer" && !isDocEmpty && (
-          <SegmentedControl
-            value={view}
-            onChange={(v) => setView(v as ViewMode)}
-            options={viewsFor(fileKind)}
-          />
-        )}
-        {fileKind === "json" && (
+        {isJson && activeTab && (
           <select
             value={parseMode}
-            onChange={(e) => setParseMode(e.target.value as typeof parseMode)}
+            onChange={(e) => setParseMode(e.target.value as ParseMode)}
             className="h-7 rounded-sm border border-stroke-strong bg-smoke-bg-layer text-ink text-[12px] px-2"
             title="JSON 解析模式"
           >
@@ -575,10 +742,15 @@ export default function App() {
             <option value="jsonl">JSONL（逐行）</option>
           </select>
         )}
+        <ToolButton
+          icon={theme === "dark" ? "sun" : "moon"}
+          title={theme === "dark" ? "切换到浅色模式" : "切换到深色模式"}
+          onClick={toggleTheme}
+        />
       </div>
 
-      {/* ============ 标签页 ============ */}
-      <div className="flex items-end h-9 px-1 shrink-0 border-b border-stroke/60">
+      {/* ============ 标签栏 ============ */}
+      <div className="flex items-end h-9 px-1 shrink-0 border-b border-stroke/60 bg-smoke-bg-subtle/40">
         <div className="flex items-end h-full overflow-x-auto min-w-0 flex-1">
           {tabs.map((t) => (
             <TabItem
@@ -600,56 +772,63 @@ export default function App() {
         </div>
       </div>
 
-      {/* ============ 内容区 ============ */}
-      <main className="flex-1 min-w-0 min-h-0 flex flex-col">
-        {page === "editor" && <EditorPage />}
-
-        {page === "viewer" && (
-          <div className="flex-1 min-h-0">
-            {isDocEmpty ? (
-              <EmptyState onOpen={() => void handleOpen()} />
-            ) : parsing && !result ? (
-              <div className="flex items-center justify-center h-full text-ink-tertiary">
-                解析中…
+      {/* ============ 主区：文档区 + 工具面板 ============ */}
+      <div className="flex-1 min-h-0 flex">
+        <main className="relative flex-1 min-w-0 min-h-0 flex flex-col bg-smoke-bg-layer">
+          {findOpen && <FindBar />}
+          {activeTab ? (
+            <SourceEditor
+              text={activeText}
+              lang={langFromPath(activeTab.path)}
+              onChange={setEditorText}
+              errorLines={errorLines}
+              reveal={revealTarget}
+              autoFocus={isDocEmpty}
+            />
+          ) : (
+            <EmptyState onOpen={() => void handleOpen()} />
+          )}
+          {activeTab && isDocEmpty && (
+            <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
+              <div className="text-center text-ink-tertiary text-[13px] leading-6">
+                空白文档 · 按 Ctrl+O 打开文件，或直接粘贴内容
               </div>
-            ) : fileKind === "json" ? (
-              view === "tree" ? (
-                <TreeView />
-              ) : view === "table" ? (
-                <TableView />
-              ) : (
-                <RawView />
-              )
-            ) : fileKind === "markdown" ? (
-              view === "preview" ? (
-                <MarkdownPreview />
-              ) : (
-                <RawView />
-              )
-            ) : fileKind === "ini" ? (
-              view === "structure" ? (
-                <IniView />
-              ) : (
-                <RawView />
-              )
-            ) : (
-              <RawView />
-            )}
-          </div>
-        )}
+            </div>
+          )}
+        </main>
 
-        {page === "query" && <QueryPanel />}
-        {page === "settings" && <SettingsPage />}
-      </main>
+        {panel !== "none" && (
+          <SidePanel
+            title={panelTitle}
+            icon={panel === "settings" ? "settings" : panel === "query" ? "search" : "tree"}
+            onClose={closePanel}
+            width={panelWidth}
+            onWidthChange={setPanelWidth}
+            headerExtra={
+              panel === "viewer" && !isDocEmpty ? (
+                <div className="flex justify-end">
+                  <SegmentedControl
+                    value={view}
+                    onChange={(v) => setView(v as ViewMode)}
+                    options={viewsFor(fileKind)}
+                  />
+                </div>
+              ) : null
+            }
+          >
+            {panelBody}
+          </SidePanel>
+        )}
+      </div>
 
       {/* ============ 状态栏 ============ */}
-      <footer className="h-7 flex items-center gap-4 px-4 text-[11px] text-ink-secondary border-t border-stroke/60 shrink-0">
+      <footer className="h-7 flex items-center gap-4 px-4 text-[11px] text-ink-secondary border-t border-stroke/60 shrink-0 bg-smoke-bg-subtle/50">
         <span className="flex items-center gap-1.5">
           <span
             className={`w-1.5 h-1.5 rounded-full ${
               isDocEmpty
                 ? "bg-ink-tertiary"
-                : fileKind === "json"
+                : isJson
                   ? result && result.diagnostics.length === 0
                     ? "bg-success"
                     : "bg-danger"
@@ -658,7 +837,7 @@ export default function App() {
           />
           {isDocEmpty
             ? "空白文档"
-            : fileKind === "json"
+            : isJson
               ? result
                 ? result.diagnostics.length === 0
                   ? "✓ JSON 合法"
@@ -666,21 +845,23 @@ export default function App() {
                 : "未解析"
               : `✓ ${kindLabel(fileKind)}`}
         </span>
-        {fileKind === "json" && result ? (
+        {isJson && result ? (
           <>
             <span>{result.stats.total_nodes.toLocaleString()} 节点</span>
             <span>深度 {result.stats.max_depth}</span>
             <span>{formatBytes(result.stats.byte_size)}</span>
             <span>{result.stats.elapsed_ms} ms</span>
           </>
-        ) : fileKind !== "json" && !isDocEmpty ? (
+        ) : !isDocEmpty ? (
           <>
             <span>{textLines.toLocaleString()} 行</span>
             <span>{formatBytes(textBytes)}</span>
           </>
         ) : null}
         <span className="flex-1 text-center text-ink-tertiary truncate">{statusMessage}</span>
-        <span className="truncate max-w-[260px]">{activeTab?.path ?? activeTab?.name}</span>
+        <span className="shrink-0">UTF-8</span>
+        <span className="shrink-0">{kindLabel(fileKind)}</span>
+        <span className="truncate max-w-[240px]">{activeTab?.path ?? activeTab?.name}</span>
       </footer>
 
       {/* ============ 关于 ============ */}
@@ -698,11 +879,14 @@ export default function App() {
         }
       >
         <div className="space-y-1.5">
-          <div className="text-[13px] font-medium text-ink">FileView v0.1.0</div>
+          <div className="text-[13px] font-medium text-ink">FileView v{APP_VERSION}</div>
           <div>Windows 11 Fluent 风格的多格式文件查看器与编辑器。</div>
-          <div>支持 JSON / JSONL / Markdown / INI / 日志 / 文本文件。</div>
+          <div>
+            支持 JSON / JSONC / JSONL、Markdown、YAML、TOML、CSV、XML、HTML、INI、代码文件与日志。
+          </div>
           <div className="text-ink-tertiary">
-            提示：按住标签页拖动（或长按后拖出），即可将文档分离为独立窗口。
+            提示：文档区默认显示文本；「查看工具」面板提供树形 / 表格 / 预览等视图；
+            拖动标签页可分离为独立窗口。
           </div>
         </div>
       </Dialog>
@@ -715,12 +899,18 @@ const ToolButton: React.FC<{
   title: string;
   onClick: () => void;
   disabled?: boolean;
-}> = ({ icon, title, onClick, disabled }) => (
+  active?: boolean;
+}> = ({ icon, title, onClick, disabled, active }) => (
   <Tooltip text={title}>
     <button
       onClick={onClick}
       disabled={disabled}
-      className="w-8 h-8 flex items-center justify-center rounded-sm text-ink-secondary hover:bg-smoke-bg-card-hover hover:text-ink disabled:opacity-35 disabled:pointer-events-none transition-colors duration-100"
+      aria-label={title}
+      className={`w-8 h-8 flex items-center justify-center rounded-md transition-colors duration-100 disabled:opacity-35 disabled:pointer-events-none ${
+        active
+          ? "bg-accent-subtle text-accent-text"
+          : "text-ink-secondary hover:bg-smoke-bg-card-hover hover:text-ink"
+      }`}
     >
       <Icon name={icon} size={15} />
     </button>
@@ -833,7 +1023,7 @@ function TabItem({
         onPointerUp={onPointerUp}
         onPointerCancel={reset}
         title="按住拖动或长按拖出，可分离为独立窗口"
-        className={`group relative flex items-center gap-1.5 px-3 h-8 mx-0.5 rounded-t-md text-[12px] max-w-[180px] select-none touch-none transition-shadow ${
+        className={`group relative flex items-center gap-1.5 px-3 h-8 mx-0.5 rounded-t-md text-[12px] max-w-[190px] select-none touch-none transition-shadow ${
           dragging
             ? "cursor-grabbing opacity-60"
             : holding
@@ -841,10 +1031,16 @@ function TabItem({
               : "cursor-default"
         } ${
           active
-            ? "bg-smoke-bg-card text-ink border-t border-x border-stroke"
+            ? "bg-smoke-bg-layer text-ink border-t border-x border-stroke"
             : "text-ink-secondary hover:bg-smoke-bg-card-hover"
         }`}
       >
+        {active && (
+          <span
+            aria-hidden
+            className="absolute left-2 right-2 top-0 h-0.5 rounded-b bg-accent"
+          />
+        )}
         <Icon name="file" size={12} className="shrink-0" />
         <span className="truncate">
           {tab.name}
@@ -857,14 +1053,16 @@ function TabItem({
             onClose();
           }}
           title="关闭标签页"
-          className="opacity-0 group-hover:opacity-100 text-ink-tertiary hover:text-ink"
+          className={`text-ink-tertiary hover:text-ink ${
+            active ? "opacity-70" : "opacity-0 group-hover:opacity-100"
+          }`}
         >
           <Icon name="close" size={10} />
         </button>
       </div>
       {(holding || dragging) && hint && (
         <div
-          className="fixed z-[999] pointer-events-none rounded-md border border-stroke bg-smoke-bg-card px-2 py-1 text-[11px] text-ink shadow-lg"
+          className="fixed z-[999] pointer-events-none rounded-md border border-stroke bg-smoke-bg-layer px-2 py-1 text-[11px] text-ink shadow-flyout"
           style={{ left: hint.x + 14, top: hint.y + 14 }}
         >
           {dragging ? "松开即可分离为独立窗口" : "拖动标签页，可分离为独立窗口"}

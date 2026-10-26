@@ -482,29 +482,22 @@ const browserSettings: Settings = defaultSettings();
 
 /** 打开文件选择器（Tauri 原生对话框 / 浏览器降级） */
 export async function openFilePicker(): Promise<FilePayload | null> {
-  const exts = [
-    "json",
-    "jsonc",
-    "jsonl",
-    "ndjson",
-    "har",
-    "geojson",
-    "md",
-    "markdown",
-    "ini",
-    "cfg",
-    "conf",
-    "txt",
-    "log",
-  ];
+  const exts = [...SUPPORTED_EXTS];
   if (isTauri()) {
     const { open } = await import("@tauri-apps/plugin-dialog");
     const path = await open({
       multiple: false,
       filters: [
         { name: "支持的文件", extensions: exts },
-        { name: "JSON 文件", extensions: ["json", "jsonc", "jsonl", "ndjson", "har", "geojson"] },
-        { name: "文本 / 配置 / 文档", extensions: ["md", "markdown", "ini", "cfg", "conf", "txt", "log"] },
+        { name: "JSON 文件", extensions: ["json", "jsonc", "json5", "jsonl", "ndjson", "har", "geojson"] },
+        {
+          name: "文档 / 配置 / 数据",
+          extensions: [
+            "md", "markdown", "yaml", "yml", "toml", "ini", "cfg", "conf", "csv", "tsv",
+            "xml", "html", "htm", "txt", "log",
+          ],
+        },
+        { name: "源代码", extensions: ["js", "ts", "jsx", "tsx", "py", "rs", "go", "java", "cs", "cpp", "c", "h", "sh", "ps1", "css", "sql"] },
         { name: "所有文件", extensions: ["*"] },
       ],
     });

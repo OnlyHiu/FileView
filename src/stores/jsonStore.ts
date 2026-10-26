@@ -16,13 +16,16 @@ import {
 } from "../lib/types";
 
 export type { ViewMode };
-export type Page = "editor" | "viewer" | "query" | "settings";
+
+/** 右侧工具面板：none = 全部收起，文档区独占 */
+export type PanelKind = "none" | "viewer" | "query" | "settings";
 
 interface JsonState {
   tabs: Tab[];
   /** 当前活动标签；tabs 为空时为 null（允许删到一个页面都不剩） */
   activeTabId: number | null;
-  page: Page;
+  /** 右侧工具面板 */
+  panel: PanelKind;
   view: ViewMode;
   parseMode: ParseMode;
   /** 当前文件大类（由活动标签页路径推导） */
@@ -39,9 +42,20 @@ interface JsonState {
   queryHits: string[];
   queryError: string | null;
   statusMessage: string;
+  /** 文档内查找 */
+  findQuery: string;
+  findCaseSensitive: boolean;
+  /** 命中位置（字符偏移），按出现顺序 */
+  findMatches: number[];
+  /** 当前命中的下标；-1 表示未选中 */
+  findIndex: number;
+  /** 查找栏是否展开 */
+  findOpen: boolean;
 
   // actions
-  setPage: (p: Page) => void;
+  setPanel: (p: PanelKind) => void;
+  /** 切换面板：同面板再次点击则收起 */
+  togglePanel: (p: PanelKind) => void;
   setView: (v: ViewMode) => void;
   setParseMode: (m: ParseMode) => void;
   newTab: () => void;
@@ -52,8 +66,13 @@ interface JsonState {
   loadDetached: (name: string, path: string | null, text: string, dirty: boolean) => void;
   reloadFromDisk: (path: string, text: string) => void;
   setEditorText: (text: string) => void;
+  undo: () => void;
+  redo: () => void;
   reparse: () => Promise<void>;
   saveFile: () => Promise<void>;
+  saveFileAs: () => Promise<void>;
+  escapeString: () => void;
+  unescapeString: () => void;
   toggleExpand: (id: number) => void;
   expandTo: (id: number) => void;
   select: (id: number | null) => void;
@@ -62,6 +81,12 @@ interface JsonState {
   runSearch: () => void;
   setQueryExpr: (e: string) => void;
   runQuery: () => Promise<void>;
+  openFind: () => void;
+  closeFind: () => void;
+  setFindQuery: (q: string) => void;
+  toggleFindCase: () => void;
+  findNext: () => void;
+  findPrev: () => void;
   applyFormat: () => Promise<void>;
   applyMinify: () => Promise<void>;
   applySort: () => Promise<void>;
@@ -77,6 +102,29 @@ let reparseTimer: ReturnType<typeof setTimeout> | null = null;
 
 /** 各文件最近一次从磁盘读入的文本（用于判断本地是否有未保存修改） */
 const diskBaselines = new Map<string, string>();
+
+/** 每个标签的编辑历史（撤销 / 重做） */
+interface TabHistory {
+  undo: string[];
+  redo: string[];
+  /** 上次记录编辑的时间戳，用于合并连续输入 */
+  lastEditAt: number;
+}
+
+const histories = new Map<number, TabHistory>();
+/** 连续输入合并窗口（毫秒） */
+const EDIT_COALESCE_MS = 600;
+/** 历史栈上限 */
+const HISTORY_LIMIT = 200;
+
+function historyOf(tabId: number): TabHistory {
+  let h = histories.get(tabId);
+  if (!h) {
+    h = { undo: [], redo: [], lastEditAt: 0 };
+    histories.set(tabId, h);
+  }
+  return h;
+}
 
 export function getDiskBaseline(path: string): string | undefined {
   return diskBaselines.get(path);
@@ -133,7 +181,7 @@ function autoExpand(nodes: FlatNode[]): Record<number, boolean> {
 export const useJsonStore = create<JsonState>((set, get) => ({
   tabs: [makeTab()],
   activeTabId: 1,
-  page: "viewer",
+  panel: "none",
   view: "tree",
   parseMode: "strict",
   fileKind: "json",
@@ -149,8 +197,15 @@ export const useJsonStore = create<JsonState>((set, get) => ({
   queryHits: [],
   queryError: null,
   statusMessage: "就绪",
+  findQuery: "",
+  findCaseSensitive: false,
+  findMatches: [],
+  findIndex: -1,
+  findOpen: false,
 
-  setPage: (p) => set({ page: p }),
+  setPanel: (p) => set({ panel: p }),
+
+  togglePanel: (p) => set((s) => ({ panel: s.panel === p ? "none" : p })),
   setView: (v) => set({ view: v }),
   setParseMode: (m) => {
     set({ parseMode: m });
@@ -257,6 +312,9 @@ export const useJsonStore = create<JsonState>((set, get) => ({
   },
 
   setEditorText: (text) => {
+    const before = get();
+    const beforeTab = before.tabs.find((t) => t.id === before.activeTabId);
+    const prevText = beforeTab?.text;
     set((s) => {
       // 零页面状态下直接输入：自动创建空白文档
       if (!s.tabs.some((t) => t.id === s.activeTabId)) {
@@ -267,12 +325,62 @@ export const useJsonStore = create<JsonState>((set, get) => ({
         tabs: s.tabs.map((t) => (t.id === s.activeTabId ? { ...t, text } : t)),
       };
     });
+    // 记录撤销历史：连续输入在 600ms 内合并为一步
+    const s = get();
+    const tab = s.tabs.find((t) => t.id === s.activeTabId);
+    if (!tab || prevText === undefined || prevText === text) return;
+    const h = historyOf(tab.id);
+    const now = Date.now();
+    if (now - h.lastEditAt > EDIT_COALESCE_MS) {
+      h.undo.push(prevText);
+      if (h.undo.length > HISTORY_LIMIT) h.undo.shift();
+      h.redo.length = 0;
+    }
+    h.lastEditAt = now;
     // 防抖解析：连续输入时不逐键触发
     if (reparseTimer) clearTimeout(reparseTimer);
     reparseTimer = setTimeout(() => {
       reparseTimer = null;
       void get().reparse();
     }, 250);
+  },
+
+  undo: () => {
+    const s = get();
+    const tab = s.tabs.find((t) => t.id === s.activeTabId);
+    if (!tab) return;
+    const h = historyOf(tab.id);
+    const prev = h.undo.pop();
+    if (prev === undefined) {
+      set({ statusMessage: "没有可撤销的操作" });
+      return;
+    }
+    h.redo.push(tab.text);
+    h.lastEditAt = 0;
+    set((st) => ({
+      tabs: st.tabs.map((t) => (t.id === tab.id ? { ...t, text: prev } : t)),
+      statusMessage: "已撤销",
+    }));
+    void get().reparse();
+  },
+
+  redo: () => {
+    const s = get();
+    const tab = s.tabs.find((t) => t.id === s.activeTabId);
+    if (!tab) return;
+    const h = historyOf(tab.id);
+    const next = h.redo.pop();
+    if (next === undefined) {
+      set({ statusMessage: "没有可重做的操作" });
+      return;
+    }
+    h.undo.push(tab.text);
+    h.lastEditAt = 0;
+    set((st) => ({
+      tabs: st.tabs.map((t) => (t.id === tab.id ? { ...t, text: next } : t)),
+      statusMessage: "已重做",
+    }));
+    void get().reparse();
   },
 
   reparse: async () => {
@@ -357,8 +465,55 @@ export const useJsonStore = create<JsonState>((set, get) => ({
     }
   },
 
-  expandTo: (id) => {
-    const { result } = get();
+  saveFileAs: async () => {
+    const { activeTabId, tabs } = get();
+    const tab = tabs.find((t) => t.id === activeTabId);
+    if (!tab) return;
+    try {
+      const path = await api.saveFileDialog(tab.name);
+      if (!path) return;
+      await api.writeFileText(path, tab.text);
+      const name = path.split(/[\\/]/).pop() ?? path;
+      diskBaselines.set(path, tab.text);
+      recordRecent(path);
+      const next: Tab = { ...tab, path, name };
+      set((s) => ({
+        tabs: s.tabs.map((t) => (t.id === activeTabId ? next : t)),
+        statusMessage: `已另存为: ${path}`,
+        ...docStateFor(next, s.view),
+      }));
+      void get().reparse();
+    } catch (e) {
+      set({ statusMessage: `另存为失败: ${e}` });
+    }
+  },
+
+  escapeString: () => {
+    const { activeTabId, tabs } = get();
+    const tab = tabs.find((t) => t.id === activeTabId);
+    if (!tab) return;
+    get().setEditorText(JSON.stringify(tab.text));
+    set({ statusMessage: "已转义为字符串字面量" });
+  },
+
+  unescapeString: () => {
+    const { activeTabId, tabs } = get();
+    const tab = tabs.find((t) => t.id === activeTabId);
+    if (!tab) return;
+    try {
+      const v = JSON.parse(tab.text);
+      if (typeof v !== "string") {
+        set({ statusMessage: "当前内容不是字符串字面量" });
+        return;
+      }
+      get().setEditorText(v);
+      set({ statusMessage: "已反转义" });
+    } catch (e) {
+      set({ statusMessage: `反转义失败: ${e}` });
+    }
+  },
+
+  expandTo: (id) => {    const { result } = get();
     if (!result) return;
     const byId = new Map(result.nodes.map((n) => [n.id, n]));
     const expanded = { ...get().expanded };
@@ -367,7 +522,7 @@ export const useJsonStore = create<JsonState>((set, get) => ({
       expanded[cur.parent] = true;
       cur = byId.get(cur.parent);
     }
-    set({ expanded, selectedId: id, page: "viewer", view: "tree" });
+    set({ expanded, selectedId: id, panel: "viewer", view: "tree" });
   },
 
   select: (id) => set({ selectedId: id }),
@@ -400,6 +555,50 @@ export const useJsonStore = create<JsonState>((set, get) => ({
       })
       .map((n) => n.id);
     set({ searchHits: hits, statusMessage: `搜索命中 ${hits.length} 处` });
+  },
+
+  openFind: () => set({ findOpen: true }),
+
+  closeFind: () => set({ findOpen: false, findQuery: "", findMatches: [], findIndex: -1 }),
+
+  setFindQuery: (q) => {
+    const s = get();
+    const tab = s.tabs.find((t) => t.id === s.activeTabId);
+    const text = tab?.text ?? "";
+    const matches = findAll(text, q, s.findCaseSensitive);
+    set({
+      findQuery: q,
+      findMatches: matches,
+      findIndex: matches.length ? 0 : -1,
+      statusMessage: q ? `查找命中 ${matches.length} 处` : "",
+    });
+  },
+
+  toggleFindCase: () => {
+    const s = get();
+    const tab = s.tabs.find((t) => t.id === s.activeTabId);
+    const text = tab?.text ?? "";
+    const caseSensitive = !s.findCaseSensitive;
+    const matches = findAll(text, s.findQuery, caseSensitive);
+    set({
+      findCaseSensitive: caseSensitive,
+      findMatches: matches,
+      findIndex: matches.length ? 0 : -1,
+    });
+  },
+
+  findNext: () => {
+    const s = get();
+    if (!s.findMatches.length) return;
+    const idx = s.findIndex < 0 ? 0 : (s.findIndex + 1) % s.findMatches.length;
+    set({ findIndex: idx, statusMessage: `查找命中 ${s.findMatches.length} 处（第 ${idx + 1} 处）` });
+  },
+
+  findPrev: () => {
+    const s = get();
+    if (!s.findMatches.length) return;
+    const idx = s.findIndex <= 0 ? s.findMatches.length - 1 : s.findIndex - 1;
+    set({ findIndex: idx, statusMessage: `查找命中 ${s.findMatches.length} 处（第 ${idx + 1} 处）` });
   },
 
   setQueryExpr: (e) => set({ queryExpr: e }),
@@ -479,4 +678,20 @@ async function getIndent(): Promise<string> {
   } catch {
     return "2";
   }
+}
+
+/** 找出所有匹配位置（字符偏移） */
+function findAll(text: string, query: string, caseSensitive: boolean): number[] {
+  if (!query) return [];
+  const hay = caseSensitive ? text : text.toLowerCase();
+  const needle = caseSensitive ? query : query.toLowerCase();
+  const out: number[] = [];
+  let from = 0;
+  while (out.length < 5000) {
+    const idx = hay.indexOf(needle, from);
+    if (idx === -1) break;
+    out.push(idx);
+    from = idx + Math.max(1, needle.length);
+  }
+  return out;
 }

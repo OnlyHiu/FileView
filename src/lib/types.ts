@@ -47,47 +47,277 @@ export interface ParseResult {
 
 export type ParseMode = "strict" | "jsonc" | "jsonl";
 
-/** 文件大类：决定可用视图与解析方式 */
-export type FileKind = "json" | "markdown" | "ini" | "text";
+/** 文件大类：决定可用视图、解析方式与高亮 */
+export type FileKind =
+  | "json"
+  | "markdown"
+  | "ini"
+  | "yaml"
+  | "toml"
+  | "csv"
+  | "xml"
+  | "html"
+  | "code"
+  | "text";
+
+/** 通用代码家族（C 风格语法） */
+export type CodeLang =
+  | "javascript"
+  | "typescript"
+  | "python"
+  | "rust"
+  | "go"
+  | "java"
+  | "csharp"
+  | "cpp"
+  | "kotlin"
+  | "swift"
+  | "php"
+  | "ruby"
+  | "shell"
+  | "powershell"
+  | "sql"
+  | "lua"
+  | "dart"
+  | "css"
+  | "plain";
+
+/** 高亮语言 */
+export type Lang =
+  | "json"
+  | "markdown"
+  | "ini"
+  | "yaml"
+  | "toml"
+  | "csv"
+  | "xml"
+  | "html"
+  | "log"
+  | "text"
+  | CodeLang;
 
 /** 查看器视图（跨文件类型的并集） */
 export type ViewMode = "tree" | "table" | "raw" | "preview" | "structure";
 
-/** 高亮语言 */
-export type Lang = "json" | "markdown" | "ini" | "log" | "text";
-
+/** 扩展名 → 文件大类 */
 const EXT_KIND: Record<string, FileKind> = {
+  // JSON 家族
   json: "json",
   jsonc: "json",
+  json5: "json",
   jsonl: "json",
   ndjson: "json",
   har: "json",
   geojson: "json",
+  webmanifest: "json",
+  // 文档
   md: "markdown",
   markdown: "markdown",
-  ini: "ini",
-  cfg: "ini",
-  conf: "ini",
+  mdown: "markdown",
   txt: "text",
   text: "text",
   log: "text",
+  // 配置
+  ini: "ini",
+  cfg: "ini",
+  conf: "ini",
+  config: "ini",
+  properties: "ini",
+  props: "ini",
+  env: "ini",
+  editorconfig: "ini",
+  gitignore: "ini",
+  npmrc: "ini",
+  yaml: "yaml",
+  yml: "yaml",
+  toml: "toml",
+  // 数据
+  csv: "csv",
+  tsv: "csv",
+  // 标记
+  xml: "xml",
+  svg: "xml",
+  html: "html",
+  htm: "html",
+  xhtml: "html",
+  vue: "html",
+  svelte: "html",
+  // 代码
+  css: "code",
+  scss: "code",
+  less: "code",
+  js: "code",
+  mjs: "code",
+  cjs: "code",
+  jsx: "code",
+  ts: "code",
+  tsx: "code",
+  py: "code",
+  rb: "code",
+  php: "code",
+  java: "code",
+  kt: "code",
+  kts: "code",
+  swift: "code",
+  rs: "code",
+  go: "code",
+  c: "code",
+  h: "code",
+  cpp: "code",
+  cc: "code",
+  cxx: "code",
+  hpp: "code",
+  cs: "code",
+  lua: "code",
+  pl: "code",
+  sh: "code",
+  bash: "code",
+  zsh: "code",
+  ps1: "code",
+  bat: "code",
+  cmd: "code",
+  sql: "code",
+  dart: "code",
+  scala: "code",
+  r: "code",
+};
+
+/** 扩展名 → 高亮语言（比大类更细） */
+const EXT_LANG: Record<string, Lang> = {
+  json: "json",
+  jsonc: "json",
+  json5: "json",
+  jsonl: "json",
+  ndjson: "json",
+  har: "json",
+  geojson: "json",
+  webmanifest: "json",
+  md: "markdown",
+  markdown: "markdown",
+  mdown: "markdown",
+  ini: "ini",
+  cfg: "ini",
+  conf: "ini",
+  config: "ini",
+  properties: "ini",
+  props: "ini",
+  env: "ini",
+  editorconfig: "ini",
+  gitignore: "ini",
+  npmrc: "ini",
+  yaml: "yaml",
+  yml: "yaml",
+  toml: "toml",
+  csv: "csv",
+  tsv: "csv",
+  xml: "xml",
+  svg: "xml",
+  html: "html",
+  htm: "html",
+  xhtml: "html",
+  vue: "html",
+  svelte: "html",
+  log: "log",
+  css: "css",
+  scss: "css",
+  less: "css",
+  js: "javascript",
+  mjs: "javascript",
+  cjs: "javascript",
+  jsx: "javascript",
+  ts: "typescript",
+  tsx: "typescript",
+  py: "python",
+  rb: "ruby",
+  php: "php",
+  java: "java",
+  kt: "kotlin",
+  kts: "kotlin",
+  swift: "swift",
+  rs: "rust",
+  go: "go",
+  c: "cpp",
+  h: "cpp",
+  cpp: "cpp",
+  cc: "cpp",
+  cxx: "cpp",
+  hpp: "cpp",
+  cs: "csharp",
+  lua: "lua",
+  pl: "text",
+  sh: "shell",
+  bash: "shell",
+  zsh: "shell",
+  ps1: "powershell",
+  bat: "shell",
+  cmd: "shell",
+  sql: "sql",
+  dart: "dart",
+  scala: "java",
+  r: "text",
 };
 
 /** 支持注册文件关联的扩展名（与 Rust 端 SUPPORTED_EXTS 一致） */
-export const SUPPORTED_EXTS: string[] = [
-  "json",
-  "jsonc",
-  "jsonl",
-  "ndjson",
-  "har",
-  "geojson",
-  "md",
-  "markdown",
-  "ini",
-  "cfg",
-  "conf",
-  "txt",
-  "log",
+export const SUPPORTED_EXTS: string[] = Object.keys(EXT_KIND);
+
+/** 文件关联分组（设置页分组展示） */
+export const EXT_GROUPS: { label: string; exts: string[] }[] = [
+  {
+    label: "JSON 家族",
+    exts: ["json", "jsonc", "json5", "jsonl", "ndjson", "har", "geojson", "webmanifest"],
+  },
+  { label: "文档与文本", exts: ["md", "markdown", "mdown", "txt", "text", "log"] },
+  {
+    label: "配置",
+    exts: [
+      "ini",
+      "cfg",
+      "conf",
+      "config",
+      "properties",
+      "props",
+      "env",
+      "editorconfig",
+      "gitignore",
+      "npmrc",
+      "yaml",
+      "yml",
+      "toml",
+    ],
+  },
+  { label: "数据", exts: ["csv", "tsv"] },
+  { label: "标记语言", exts: ["xml", "svg", "html", "htm", "xhtml", "vue", "svelte"] },
+  {
+    label: "前端",
+    exts: ["css", "scss", "less", "js", "mjs", "cjs", "jsx", "ts", "tsx"],
+  },
+  {
+    label: "脚本与后端",
+    exts: [
+      "py",
+      "rb",
+      "php",
+      "java",
+      "kt",
+      "kts",
+      "swift",
+      "rs",
+      "go",
+      "c",
+      "h",
+      "cpp",
+      "cc",
+      "cxx",
+      "hpp",
+      "cs",
+      "lua",
+      "pl",
+      "dart",
+      "scala",
+      "r",
+    ],
+  },
+  { label: "脚本与数据库", exts: ["sh", "bash", "zsh", "ps1", "bat", "cmd", "sql"] },
 ];
 
 function extOf(path: string | null): string | null {
@@ -103,17 +333,37 @@ export function kindFromPath(path: string | null): FileKind {
   return (ext && EXT_KIND[ext]) || "text";
 }
 
-/** 高亮语言（.log 在文本大类下单独高亮） */
+/** 高亮语言（按扩展名细分，未知扩展名按纯文本） */
 export function langFromPath(path: string | null): Lang {
   if (!path) return "json";
   const ext = extOf(path);
-  if (ext === "log") return "log";
-  const kind = kindFromPath(path);
-  return kind === "json" ? "json" : kind === "markdown" ? "markdown" : kind === "ini" ? "ini" : "text";
+  if (!ext) return "text";
+  return EXT_LANG[ext] ?? "text";
 }
 
 export function kindLabel(kind: FileKind): string {
-  return kind === "json" ? "JSON" : kind === "markdown" ? "Markdown" : kind === "ini" ? "INI 配置" : "文本";
+  switch (kind) {
+    case "json":
+      return "JSON";
+    case "markdown":
+      return "Markdown";
+    case "ini":
+      return "INI 配置";
+    case "yaml":
+      return "YAML";
+    case "toml":
+      return "TOML";
+    case "csv":
+      return "CSV 表格";
+    case "xml":
+      return "XML";
+    case "html":
+      return "HTML";
+    case "code":
+      return "源代码";
+    default:
+      return "文本";
+  }
 }
 
 /** 每种文件大类可用的查看器标签页 */
@@ -131,8 +381,30 @@ export function viewsFor(kind: FileKind): { value: ViewMode; label: string; icon
         { value: "raw", label: "源码", icon: "code" },
       ];
     case "ini":
+    case "yaml":
+    case "toml":
       return [
         { value: "structure", label: "结构", icon: "folder" },
+        { value: "raw", label: "源码", icon: "code" },
+      ];
+    case "csv":
+      return [
+        { value: "table", label: "表格", icon: "table" },
+        { value: "raw", label: "源码", icon: "code" },
+      ];
+    case "xml":
+      return [
+        { value: "structure", label: "结构", icon: "folder" },
+        { value: "raw", label: "源码", icon: "code" },
+      ];
+    case "html":
+      return [
+        { value: "preview", label: "预览", icon: "file" },
+        { value: "raw", label: "源码", icon: "code" },
+      ];
+    case "code":
+      return [
+        { value: "structure", label: "大纲", icon: "tree" },
         { value: "raw", label: "源码", icon: "code" },
       ];
     default:
@@ -140,14 +412,22 @@ export function viewsFor(kind: FileKind): { value: ViewMode; label: string; icon
   }
 }
 
-/** 默认标签页：Markdown → 预览，INI → 结构，其余 → 源码/文本；JSON → 树形 */
+/** 默认标签页：Markdown/HTML → 预览，配置类 → 结构，CSV → 表格，JSON → 树形，其余 → 源码 */
 export function defaultViewFor(kind: FileKind): ViewMode {
   switch (kind) {
     case "json":
       return "tree";
     case "markdown":
+    case "html":
       return "preview";
     case "ini":
+    case "yaml":
+    case "toml":
+    case "xml":
+      return "structure";
+    case "csv":
+      return "table";
+    case "code":
       return "structure";
     default:
       return "raw";

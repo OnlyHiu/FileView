@@ -19,10 +19,9 @@
 
 ## 简介
 
-FileView 是一款 Windows 桌面应用，用于**查看、解析与编辑** JSON、Markdown、INI 配置、日志和纯文本文件。
-打开不同类型的文件会自动切换到对应视图：JSON 有树形 / 表格 / 原始三视图，Markdown 有渲染预览，
-INI 有结构化键值视图，日志按级别着色。内置编辑器支持保存（Ctrl+S）、格式化、JSONPath 查询，
-并可深度集成 Windows 资源管理器（右键菜单 / 文件关联 / 开机自启）。
+FileView 是一款 Windows 桌面应用，采用 Notepad++ 的操作逻辑：**文档区恒为文本**，树形 / 表格 / 预览等查看能力收进右侧可关闭的「查看工具」面板，格式化等 JSON 专用操作集中在「格式化」菜单。
+支持 JSON、Markdown、YAML、TOML、CSV、XML、HTML、INI、代码文件与日志的查看与编辑，
+内置文档内查找、撤销 / 重做、JSONPath 查询，并可深度集成 Windows 资源管理器（右键菜单 / 文件关联 / 开机自启）。
 
 > Windows 11 Fluent / WinUI 3 风格界面 · Tauri 2 (Rust) + React 18 + Vite + Tailwind CSS
 
@@ -36,10 +35,13 @@ INI 有结构化键值视图，日志按级别着色。内置编辑器支持保�
 
 | 模块 | 说明 |
 |---|---|
-| **多格式视图** | JSON：树形（虚拟滚动）/ 表格（对象数组转表）/ 原始；Markdown：预览 / 源码；INI：结构 / 源码；日志：级别与时间戳着色 |
+| **多格式查看** | JSON：树形（虚拟滚动）/ 表格（对象数组转表）/ 原始；Markdown：预览 / 源码；YAML·TOML：键结构 / 源码；CSV·TSV：表格；XML：标签树；HTML：沙箱预览；代码文件：符号大纲 / 源码；日志：级别与时间戳着色 |
+| **面板化布局** | 文档区始终显示文本；查看工具 / JSONPath 查询 / 设置均为右侧可拖拽停靠面板，互不遮挡，Esc 一键关闭 |
+| **查找与历史** | 文档内查找（Ctrl+F，Enter 跳转下一处、区分大小写）、撤销 / 重做（Ctrl+Z / Ctrl+Y，600ms 合并连续输入）|
+| **语法高亮** | JSON / Markdown / YAML / TOML / CSV / XML / HTML / 日志 + 20+ 代码家族（JS·TS·Python·Rust·Go·Java·C#·C++…）关键字、类型、函数与内置常量着色 |
 | **解析诊断** | 行列级错误定位、错误行高亮；严格 JSON / JSONC（注释、尾逗号）/ JSONL（逐行）|
 | **查询** | JSONPath（`$.a.b[0]`、`[*]`、`..key`、`['key']`）+ 全文搜索（键/值，点击跳转树节点）|
-| **编辑保存** | 编辑器页 / 查看器均可编辑；**Ctrl+S 保存**、另存为、格式化（2/4 空格/Tab）、压缩、键排序 |
+| **编辑保存** | 文档区直接编辑；**Ctrl+S 保存**、Ctrl+Shift+S 另存为、格式化（2/4 空格/Tab）、压缩、键排序、字符串转义 / 反转义（均在「格式化」菜单）|
 | **标签页** | 多标签编辑、脏标记（未保存 •）、空白页可删除、拖拽打开、文件变更自动重载 |
 | **系统集成** | 右键菜单「用 FileView 打开」、文件关联与默认应用注册、开机自启、一键清理（注册表无残留）|
 
@@ -47,19 +49,24 @@ INI 有结构化键值视图，日志按级别着色。内置编辑器支持保�
 
 | 类型 | 扩展名 | 视图 |
 |---|---|---|
-| JSON 家族 | `.json` `.jsonc` `.jsonl` `.ndjson` `.har` `.geojson` | 树形 / 表格 / 原始 |
-| Markdown | `.md` `.markdown` | 预览 / 源码 |
-| INI 配置 | `.ini` `.cfg` `.conf` | 结构 / 源码 |
-| 日志 / 文本 | `.log` `.txt` | 高亮文本 |
+| JSON 家族 | `.json` `.jsonc` `.json5` `.jsonl` `.ndjson` `.har` `.geojson` `.webmanifest` | 树形 / 表格 / 原始 |
+| Markdown | `.md` `.markdown` `.mdown` | 预览 / 源码 |
+| 配置 | `.ini` `.cfg` `.conf` `.config` `.properties` `.env` `.yaml` `.yml` `.toml` | 结构 / 源码 |
+| 数据 | `.csv` `.tsv` | 表格 |
+| 标记语言 | `.xml` `.svg` `.html` `.htm` `.vue` `.svelte` | 结构 / 预览 |
+| 代码 | `.js` `.ts` `.jsx` `.tsx` `.py` `.rs` `.go` `.java` `.cs` `.cpp` `.c` `.h` `.php` `.rb` `.sh` `.ps1` `.sql` `.css` 等 60+ 扩展名 | 大纲 / 源码 |
+| 日志 / 文本 | `.log` `.txt` `.text` | 高亮文本 |
 
-## 🖥️ 页面
+## 🖥️ 界面区域
 
-| 页面 | 说明 |
+| 区域 | 说明 |
 |---|---|
-| 查看器 | 只读展示解析结果（也可直接编辑保存）|
-| 编辑器 | 编辑当前文件或空白文档，JSON 附带格式化 / 压缩 / 键排序工具 |
-| 查询 | JSONPath 查询与全文搜索 |
-| 设置 | 外观、编辑器偏好、Windows 系统集成 |
+| 文档区 | 始终显示当前文件文本：行号、语法高亮、当前行高亮、错误行标注，可直接编辑保存 |
+| 查看工具面板 | 右侧停靠，按文件类型提供树形 / 表格 / 预览 / 结构 / 大纲 / 原始视图，可拖拽调宽 |
+| 查询面板 | JSONPath 查询与全文搜索，点击结果定位到树节点 |
+| 设置面板 | 外观、编辑器偏好、Windows 右键菜单 / 文件关联 / 开机自启 |
+
+> 面板与文档区并存，打开设置不会遮挡正文，随时可关闭。
 
 ## 📥 下载
 
@@ -67,7 +74,7 @@ INI 有结构化键值视图，日志按级别着色。内置编辑器支持保�
 
 | 文件 | 说明 |
 |---|---|
-| [**FileView_0.1.0_x64-setup.exe**](https://github.com/OnlyHiu/FileView/releases/latest/download/FileView_0.1.0_x64-setup.exe) | NSIS 安装包（推荐，含卸载项）|
+| [**FileView_0.2.0_x64-setup.exe**](https://github.com/OnlyHiu/FileView/releases/latest/download/FileView_0.2.0_x64-setup.exe) | NSIS 安装包（推荐，含卸载项）|
 | [**fileview.exe**](https://github.com/OnlyHiu/FileView/releases/latest/download/fileview.exe) | 免安装单文件，双击即用 |
 
 > 安装后在设置页勾选扩展名即可注册右键菜单与文件关联。
@@ -103,7 +110,8 @@ npm run tauri:build          # 打包 exe + NSIS 安装器
 │   └── src/main.rs         # Tauri 命令层
 ├── scripts/gen-icon.mjs    # 程序化生成应用图标
 ├── push.bat                # 一键推送到仓库
-└── docs/DESIGN-PLAN.md     # 设计计划
+├── docs/DESIGN-PLAN.md     # 设计计划
+├── docs/PLAN-v0.2.0.md      # v0.2.0 需求计划
 ```
 
 ## 🔗 系统集成实现说明

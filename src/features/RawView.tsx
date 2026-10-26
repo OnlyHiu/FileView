@@ -1,11 +1,11 @@
-// 原始/源码/文本视图：复用 SourceEditor（可编辑，Ctrl+S 保存）+ JSON 诊断标注
+// 原始 / 源码 / 文本视图：复用 SourceEditor（可编辑，Ctrl+S 保存）+ JSON 诊断标注
 
 import React, { useMemo } from "react";
 import { useJsonStore } from "../stores/jsonStore";
 import { SourceEditor } from "./SourceEditor";
 import { kindFromPath, langFromPath } from "../lib/types";
 
-export const RawView: React.FC = () => {
+export const RawView: React.FC<{ readOnly?: boolean }> = ({ readOnly = false }) => {
   const tabs = useJsonStore((s) => s.tabs);
   const activeTabId = useJsonStore((s) => s.activeTabId);
   const setEditorText = useJsonStore((s) => s.setEditorText);
@@ -27,5 +27,13 @@ export const RawView: React.FC = () => {
     return set;
   }, [result, isJson]);
 
-  return <SourceEditor text={text} lang={lang} onChange={setEditorText} errorLines={errorLines} />;
+  return (
+    <SourceEditor
+      text={text}
+      lang={lang}
+      onChange={readOnly ? undefined : setEditorText}
+      errorLines={errorLines}
+      readOnly={readOnly}
+    />
+  );
 };
