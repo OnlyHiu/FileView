@@ -52,6 +52,8 @@ export interface MenuBarProps {
   onUnescapeString: () => void;
   onParseMode: (m: ParseMode) => void;
   onTogglePanel: (p: PanelKind) => void;
+  /** 直接打开面板（不切换开合状态） */
+  onShowPanel: (p: PanelKind) => void;
   onView: (v: ViewMode) => void;
   onToggleTheme: () => void;
   onZoom: (delta: number) => void;
@@ -168,7 +170,7 @@ export const MenuBar: React.FC<MenuBarProps> = (p) => {
             checked: p.panel === "viewer" && p.view === v.value,
             onClick: () => {
               p.onView(v.value);
-              p.onTogglePanel("viewer");
+              p.onShowPanel("viewer");
             },
           })),
           "separator",

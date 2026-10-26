@@ -691,6 +691,7 @@ export default function App() {
         onUndo={undo}
         onRedo={redo}
         onTogglePanel={togglePanel}
+        onShowPanel={setPanel}
         onView={(v: ViewMode) => setView(v)}
         onToggleTheme={toggleTheme}
         onZoom={zoomFont}
