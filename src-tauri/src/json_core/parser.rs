@@ -105,24 +105,25 @@ pub struct ParseResult {
 }
 
 /// serde_json 错误（含行列） -> Diagnostic
+///
+/// serde_json 的 `column()` 是**行内字节偏移**（1 起），不是字符数；
+/// 因此换算为全局偏移时必须按**字节**推进，否则遇到多字节字符会算偏。
 fn diag_from_serde(text: &str, err: &serde_json::Error) -> Diagnostic {
     let line = err.line().max(1);
     let column = err.column().max(1);
-    // 计算 offset：行首字节偏移 + 列内前进 column-1 个字符
-    let mut off = 0usize;
-    for seg in text.split('\n').take(line - 1) {
-        off += seg.len() + 1; // +1 = '\n'
-    }
-    let rest = text.get(off..).unwrap_or("");
-    let mut col_off = 0usize;
-    for ch in rest.chars().take(column - 1) {
-        if ch == '\n' {
+    // 行首字节偏移
+    let mut line_start = 0usize;
+    for (i, seg) in text.split('\n').enumerate() {
+        if i + 1 == line {
             break;
         }
-        col_off += ch.len_utf8();
+        line_start += seg.len() + 1; // +1 = '\n'
     }
-    let off = (off + col_off).min(text.len());
-    let snippet = text.split('\n').nth(line - 1).unwrap_or("").trim_end().to_string();
+    // 列 → 行内字节偏移（serde 的列为 1 起，故减 1）
+    let line_text = text.split('\n').nth(line - 1).unwrap_or("");
+    let col_bytes = (column - 1).min(line_text.len());
+    let off = (line_start + col_bytes).min(text.len());
+    let snippet = line_text.trim_end().to_string();
     Diagnostic {
         severity: Severity::Error,
         message: format!("JSON 解析错误: {}", err),
@@ -135,58 +136,62 @@ fn diag_from_serde(text: &str, err: &serde_json::Error) -> Diagnostic {
 
 /// 剥离 JSONC 注释与尾逗号（严格模式不调用）。
 ///
+/// **字节长度保持不变**：注释的每个字节替换为一个空格（换行保留），
+/// 尾逗号同样替换为空格而非删除。因此剥离结果与原文**逐字节对齐**，
+/// serde_json 报出的行/列（字节列）可以直接映射回原文，行列号与偏移都不会漂移。
+///
 /// 两遍处理：
-/// 1. 注释替换为等量空格（换行保留）——保证行列号/偏移与原文一致；
-/// 2. 移除尾逗号（此时注释已变为空白，look-ahead 只需跳过空白，
+/// 1. 注释 → 等量空格（按字节，换行保留）；
+/// 2. 尾逗号 → 空格（此时注释已变为空白，look-ahead 只需跳过空白，
 ///    「逗号 + 注释 + 闭合括号」也能正确识别）。
 pub fn strip_jsonc(text: &str) -> String {
-    let chars: Vec<char> = text.chars().collect();
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
 
-    // ---- 第一遍：注释 → 空格（保留换行与列位置） ----
-    let mut out = String::with_capacity(text.len());
+    // ---- 第一遍：注释 → 空格（按字节，保留换行） ----
     let mut i = 0usize;
     let mut in_string = false;
     let mut escaped = false;
-    while i < chars.len() {
-        let c = chars[i];
+    while i < bytes.len() {
+        let c = bytes[i];
         if in_string {
             out.push(c);
             if escaped {
                 escaped = false;
-            } else if c == '\\' {
+            } else if c == b'\\' {
                 escaped = true;
-            } else if c == '"' {
+            } else if c == b'"' {
                 in_string = false;
             }
             i += 1;
             continue;
         }
         match c {
-            '"' => {
+            b'"' => {
                 in_string = true;
                 out.push(c);
                 i += 1;
             }
-            '/' if i + 1 < chars.len() && chars[i + 1] == '/' => {
-                // 行注释：替换为空格直到行尾（换行保留）
-                while i < chars.len() && chars[i] != '\n' {
-                    out.push(' ');
+            b'/' if i + 1 < bytes.len() && bytes[i + 1] == b'/' => {
+                // 行注释：整行替换为空格（换行保留）
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    out.push(b' ');
                     i += 1;
                 }
             }
-            '/' if i + 1 < chars.len() && chars[i + 1] == '*' => {
-                // 块注释：逐字符替换（换行保留），避免多行注释导致行号漂移
-                while i < chars.len() {
-                    if chars[i] == '*' && i + 1 < chars.len() && chars[i + 1] == '/' {
-                        out.push(' ');
-                        out.push(' ');
+            b'/' if i + 1 < bytes.len() && bytes[i + 1] == b'*' => {
+                // 块注释：逐字节替换（换行保留），避免多行注释导致行号漂移
+                while i < bytes.len() {
+                    if bytes[i] == b'*' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+                        out.push(b' ');
+                        out.push(b' ');
                         i += 2;
                         break;
                     }
-                    if chars[i] == '\n' {
-                        out.push('\n');
+                    if bytes[i] == b'\n' {
+                        out.push(b'\n');
                     } else {
-                        out.push(' ');
+                        out.push(b' ');
                     }
                     i += 1;
                 }
@@ -198,67 +203,73 @@ pub fn strip_jsonc(text: &str) -> String {
         }
     }
 
-    // ---- 第二遍：移除尾逗号 ----
-    let chars: Vec<char> = out.chars().collect();
-    let mut out = String::with_capacity(chars.len());
+    // ---- 第二遍：尾逗号 → 空格（保持字节长度） ----
+    let mut out2 = Vec::with_capacity(out.len());
     let mut i = 0usize;
     let mut in_string = false;
     let mut escaped = false;
     // 上一个非空白有效字符：用于区分「值后尾逗号」与 `"key": ,` 这类真正的语法错误
-    let mut last_sig: Option<char> = None;
-    while i < chars.len() {
-        let c = chars[i];
+    let mut last_sig: Option<u8> = None;
+    while i < out.len() {
+        let c = out[i];
         if in_string {
-            out.push(c);
-            if !c.is_whitespace() {
+            out2.push(c);
+            if !c.is_ascii_whitespace() {
                 last_sig = Some(c);
             }
             if escaped {
                 escaped = false;
-            } else if c == '\\' {
+            } else if c == b'\\' {
                 escaped = true;
-            } else if c == '"' {
+            } else if c == b'"' {
                 in_string = false;
             }
             i += 1;
             continue;
         }
         match c {
-            '"' => {
+            b'"' => {
                 in_string = true;
-                out.push(c);
+                out2.push(c);
                 last_sig = Some(c);
                 i += 1;
             }
-            ',' => {
-                out.push(c);
+            b',' => {
                 i += 1;
                 // 可能是尾逗号：跳过空白后是否为 } 或 ]，且逗号紧跟在值之后
                 let mut j = i;
-                while j < chars.len() && chars[j].is_whitespace() {
+                while j < out.len() && out[j].is_ascii_whitespace() {
                     j += 1;
                 }
-                let after = j < chars.len() && (chars[j] == '}' || chars[j] == ']');
+                let after = j < out.len() && (out[j] == b'}' || out[j] == b']');
                 // 值的结尾字符：字符串 '"'、对象 '}'、数组 ']'、数字 0-9、
                 // true/false 的 'e'、null 的 'l'
-                let after_value = matches!(last_sig, Some('"') | Some('}') | Some(']') | Some('e') | Some('l'))
-                    || matches!(last_sig, Some(c) if c.is_ascii_digit());
+                let after_value = matches!(last_sig, Some(b'"') | Some(b'}') | Some(b']') | Some(b'e') | Some(b'l'))
+                    || matches!(last_sig, Some(d) if d.is_ascii_digit());
                 if after && after_value {
-                    out.pop(); // 移除刚 push 的逗号
+                    // 用空格替换逗号（而不是删除），保持与原文的字节对齐
+                    out2.push(b' ');
                 } else {
-                    last_sig = Some(',');
+                    out2.push(b',');
+                    last_sig = Some(b',');
                 }
             }
             _ => {
-                out.push(c);
-                if !c.is_whitespace() {
+                out2.push(c);
+                if !c.is_ascii_whitespace() {
                     last_sig = Some(c);
                 }
                 i += 1;
             }
         }
     }
-    out
+    // 安全兜底：长度不一致时退回原始文本（不应发生）
+    if out2.len() == bytes.len() {
+        // 重新按 UTF-8 组装
+        String::from_utf8(out2).unwrap_or_else(|_| text.to_string())
+    } else {
+        text.to_string()
+    }
 }
 
 struct Flattener {
@@ -437,9 +448,13 @@ pub fn parse(text: &str, mode: ParseMode) -> ParseResult {
                 }
                 pos += seg.len() + 1;
             }
+            // 坏行诊断必须保留：即使部分行解析成功，也要让用户看到出错行。
+            // 只有在「一行都没解析出来」时才整体失败（此时不返回任何节点）。
             if values.is_empty() && !diags.is_empty() {
                 Err(diags)
             } else {
+                // 保留诊断，但不影响已解析的节点
+                diagnostics.extend(diags);
                 Ok(values)
             }
         }
@@ -527,8 +542,10 @@ pub fn to_value(text: &str, mode: ParseMode) -> Result<Value, String> {
         ParseMode::Jsonc => serde_json::from_str(&strip_jsonc(text)).map_err(|e| format!("解析失败: {}", e)),
         ParseMode::Jsonl => {
             let mut values = Vec::new();
-            for (idx, line) in text.lines().enumerate() {
-                let t = line.trim();
+            // 与 parse() 保持一致：用 split('\n') 而非 lines()，以便 CRLF 精确记账
+            for (idx, seg) in text.split('\n').enumerate() {
+                let content = seg.strip_suffix('\r').unwrap_or(seg);
+                let t = content.trim();
                 if t.is_empty() {
                     continue;
                 }

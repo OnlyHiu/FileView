@@ -30,17 +30,41 @@ pub fn collect_status() -> IntegrationStatus {
 
 /// 清理旧品牌 "JsonViewer" 的注册表痕迹（更名 FileView 的一次性迁移，幂等）。
 /// 旧 ProgID / 菜单 / 自启项 / 默认应用登记一律移除，随后启动注入会按设置重建新品牌的键。
+///
+/// 安全约束：只删除**确实由本应用旧版本写入**的键。
+/// 判定依据是键内记录的打开命令指向可执行文件名含 "JsonViewer"；
+/// 否则可能误删同名但属于其它软件的注册表项。
 pub fn migrate_legacy_brand() {
     use registry::{delete_key, open_key};
-    // 旧「默认应用」登记
+    // 旧「默认应用」登记：仅当其指向 JsonViewer 的 Capabilities 才删除
     if let Ok(ra) = open_key(r"Software\RegisteredApplications") {
-        let _ = ra.delete_value("JSON Viewer");
+        if let Ok(v) = ra.get_value::<String, _>("JSON Viewer") {
+            if v.to_lowercase().contains("jsonviewer") {
+                let _ = ra.delete_value("JSON Viewer");
+            }
+        }
     }
-    let _ = delete_key(r"Software\Classes\JsonViewer\Capabilities");
+    // 旧 Capabilities 键：其 ApplicationDescription 是旧品牌专用文案，
+    // 据此判定归属，避免删除同名但属于其它软件的键。
+    let legacy_caps = r"Software\Classes\JsonViewer\Capabilities";
+    if let Ok(caps) = open_key(legacy_caps) {
+        let ours = caps
+            .get_value::<String, _>("ApplicationDescription")
+            .map(|d| d.contains("JSON Viewer") || d.contains("JsonViewer"))
+            .unwrap_or(false);
+        if ours {
+            let _ = delete_key(legacy_caps);
+        }
+    }
     // 旧 ProgID 与扩展名对旧 ProgID 的引用
     for ext in file_assoc::SUPPORTED_EXTS {
         let old_pid = format!("JsonViewer.{}", ext);
-        let _ = delete_key(format!(r"Software\Classes\{}", old_pid));
+        let old_path = format!(r"Software\Classes\{}", old_pid);
+        // 仅删除确实由本应用旧版本创建的 ProgID
+        if !registry::is_our_legacy_progid(&old_path) {
+            continue;
+        }
+        let _ = delete_key(&old_path);
         if let Ok(ext_key) = open_key(format!(r"Software\Classes\.{}", ext)) {
             if let Ok(v) = ext_key.get_value::<String, _>("") {
                 if v == old_pid {
@@ -52,7 +76,7 @@ pub fn migrate_legacy_brand() {
             }
         }
     }
-    // 旧右键菜单
+    // 旧右键菜单：仅当命令指向 JsonViewer 才删除
     for base in [
         r"Software\Classes\*\shell\JsonViewer",
         r"Software\Classes\.json\shell\JsonViewer",
@@ -60,23 +84,37 @@ pub fn migrate_legacy_brand() {
         r"Software\Classes\Folder\shell\JsonViewer",
         r"Software\Classes\Directory\Background\shell\JsonViewer",
     ] {
-        let _ = delete_key(base);
+        if registry::is_our_legacy_shell_key(base) {
+            let _ = delete_key(base);
+        }
     }
-    // 旧自启项与旧应用键（含 managed_keys 清单）
+    // 旧自启项（仅当指向 JsonViewer）与旧应用键（含 managed_keys 清单）
     if let Ok(run) = open_key(autostart::RUN_KEY) {
-        let _ = run.delete_value("JsonViewer");
+        if let Ok(v) = run.get_value::<String, _>("JsonViewer") {
+            if v.to_lowercase().contains("jsonviewer") {
+                let _ = run.delete_value("JsonViewer");
+            }
+        }
     }
-    let _ = delete_key(r"Software\JsonViewer");
+    if registry::is_our_legacy_progid(r"Software\JsonViewer")
+        || registry::key_exists(r"Software\JsonViewer\managed_keys")
+    {
+        let _ = delete_key(r"Software\JsonViewer");
+    }
     registry::notify_shell_assoc_changed();
 }
 
 /// 一键清理：移除所有系统集成痕迹
 pub fn cleanup_all() -> Result<IntegrationStatus, String> {
     context_menu::uninstall(&[])?;
-    for (ext, on) in file_assoc::status() {
-        if on {
-            file_assoc::unregister(&ext)?;
-        }
+    // 批量注销：只触发一次能力表刷新与一次 Shell 广播
+    let registered: Vec<String> = file_assoc::status()
+        .into_iter()
+        .filter(|(_, on)| *on)
+        .map(|(ext, _)| ext)
+        .collect();
+    if !registered.is_empty() {
+        file_assoc::unregister_many(&registered)?;
     }
     file_assoc::clear_capabilities();
     autostart::set_autostart(false, false)?;

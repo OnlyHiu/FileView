@@ -95,11 +95,11 @@
 |---|---|
 | 状态 | `jsonStore` 中 `page: "editor" \| "viewer" \| ...` 改为 `panel: "none" \| "viewer" \| "query" \| "settings"`；新增 `find*`、`undo/redo` 状态 |
 | 面板 | 新增 `components/SidePanel.tsx`（头部 + 可拖拽分隔条 + 内容区）；`features/QueryPanel.tsx`、`features/SettingsPage.tsx` 改为面板内自适应宽度 |
-| 编辑器 | `features/SourceEditor.tsx` 增加 `ref` 暴露 `revealOffset(offset, length)` 供查找跳转；行号槽支持当前行高亮 |
-| 高亮 | `lib/highlight.ts` 新增 `tokenizeCode`（C 家族通用）与 `tokenizeYaml/Toml/Xml/Html/Csv` |
-| 表格 | 新增 `features/CsvView.tsx`（CSV/TSV 解析 + 虚拟化表格复用） |
+| 编辑器 | `features/SourceEditor.tsx` 通过 `reveal` 属性接收定位请求（start / end / nonce），行号槽支持当前行高亮 |
+| 高亮 | `lib/highlight.ts` 新增 `tokenizeCode`（C 家族通用）与 `tokenizeYaml/Toml/Xml/Html/Csv`；CSV 另增 `detectCsvDelimiter` 自动识别分隔符 |
+| 表格 | 新增 `features/CsvView.tsx`（CSV/TSV 解析 + 表格展示，行数上限 2000） |
 | 结构 | 新增 `features/KeyValueView.tsx`（YAML/TOML 键路径树） |
-| 后端 | 仅扩展 `sys::file_assoc::SUPPORTED_EXTS` 与注册描述；其余命令复用 |
+| 后端 | 扩展 `sys::file_assoc::SUPPORTED_EXTS` 与注册描述；新增 `register_many` / `unregister_many` 批量接口；其余命令复用 |
 | 版本 | `package.json`、`Cargo.toml`、`tauri.conf.json`、关于对话框、设置页同步升级至 `0.2.0` |
 
 ---
@@ -135,8 +135,36 @@
 | P1 设置覆盖文本区 | 新增 `components/SidePanel.tsx`：右侧不透明停靠面板 + 拖拽调宽 + ×/Esc 关闭；设置 / 查询 / 查看工具均改为面板，文档区常驻 |
 | P2 编辑器与查看器分界 | 移除 `page`（editor/viewer 二选一），改为 `panel`；文档区恒为文本，查看器降级为「查看工具」面板内的视图切换 |
 | P3 格式化散落 | 工具栏移除格式化 / 压缩 / 键排序，统一收进「格式化」菜单（含解析模式、字符串转义 / 反转义） |
-| P4 格式支持偏少 | `FileKind` 扩展为 10 类、扩展名 60+；新增 YAML / TOML / CSV / XML / HTML 高亮与结构视图、20+ 代码家族高亮与符号大纲；Rust `SUPPORTED_EXTS` 同步 |
+| P4 格式支持偏少 | `FileKind` 扩展为 10 类、扩展名 73 个；新增 YAML / TOML / CSV / XML / HTML 高亮与结构视图、20+ 代码家族高亮与符号大纲；Rust `SUPPORTED_EXTS` 同步 |
 | P5 观感与操作 | 新增查找栏（Ctrl+F）、撤销 / 重做、当前行高亮、标签激活强调条、面板化状态栏、`Ctrl+B` 开关查看工具 |
 | 版本 | 0.1.0 → 0.2.0（package.json / Cargo.toml / tauri.conf.json / 关于 / 设置页 / README） |
 
 验证：`npm run build`、`npm run tauri:build` 通过；桌面端实测设置面板不遮挡正文、格式化菜单可用、拖拽分离窗口仍可用、查找与撤销重做正常。
+
+---
+
+## 8. 审核修正（2026-10-29）
+
+代码审核发现本计划与实现之间存在若干偏差，已在实现侧修正或在本节更正说明。
+完整清单见 [`AUDIT-v0.2.0.md`](./AUDIT-v0.2.0.md)。
+
+### 8.1 本文档的偏差更正
+
+| 位置 | 原描述 | 更正 |
+|---|---|---|
+| FR-1 | 面板最小 320px / 最大 70% | 实现为最小 **340px** / 最大 **72%**（`SidePanel.tsx`） |
+| FR-4 | 查找栏含「替换入口占位」 | 未实现替换入口，仅有查找 / 上一个 / 下一个 / 区分大小写 |
+| FR-9 | XML/HTML → 结构化标签树 | XML 有标签树视图；**HTML 仅有预览与源码**，无标签树 |
+| §4 高亮 | `SourceEditor` 暴露 `revealOffset(offset, length)` ref | 实现为声明式 `reveal` 属性（start / end / nonce），功能等价 |
+| §4 表格 | `CsvView.tsx` 虚拟化表格复用 | 实现为普通 `<table>`，行数上限 2000，**未虚拟化** |
+| §5 | 查找栏「Ctrl+F 就地浮出」 | 实现为插入在编辑器上方的独立行（会压缩文档区高度），非浮层 |
+
+### 8.2 实现侧的修正
+
+- **CSV 分隔符自动识别**已实现（`detectCsvDelimiter`），与发行说明一致。
+- **面板与文档区的 Esc 冲突**已分层：对话框在最上层，其次查找栏，最后侧栏面板。
+- **查找命中的实时性**：文档或标签变化后重新计算命中偏移；
+  定位仅在用户主动导航查找时触发，避免打字时抢走光标。
+- **跨标签状态隔离**：切换 / 关闭标签时清空解析结果、折叠状态、选中项与搜索命中。
+- **树形折叠按节点路径索引**（而非节点 id），避免文档头部增删导致展开状态错位。
+- **文件关联默认不注册**：首次启动不再静默抢占 70+ 种扩展名的默认处理程序。

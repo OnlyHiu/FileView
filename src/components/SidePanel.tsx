@@ -39,10 +39,13 @@ export const SidePanel: React.FC<{
     [onWidthChange]
   );
 
-  // 面板打开时按 Esc 关闭
+  // 面板打开时按 Esc 关闭。
+  // 对话框打开时交由对话框处理（对话框在最上层），避免一次 Esc 关闭两层。
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key !== "Escape") return;
+      if (document.querySelector('[role="dialog"]')) return;
+      onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);

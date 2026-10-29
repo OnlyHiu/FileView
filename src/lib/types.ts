@@ -80,6 +80,8 @@ export type CodeLang =
   | "lua"
   | "dart"
   | "css"
+  | "perl"
+  | "r"
   | "plain";
 
 /** 高亮语言 */
@@ -244,7 +246,7 @@ const EXT_LANG: Record<string, Lang> = {
   hpp: "cpp",
   cs: "csharp",
   lua: "lua",
-  pl: "text",
+  pl: "perl",
   sh: "shell",
   bash: "shell",
   zsh: "shell",
@@ -254,7 +256,7 @@ const EXT_LANG: Record<string, Lang> = {
   sql: "sql",
   dart: "dart",
   scala: "java",
-  r: "text",
+  r: "r",
 };
 
 /** 支持注册文件关联的扩展名（与 Rust 端 SUPPORTED_EXTS 一致） */

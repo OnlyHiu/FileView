@@ -469,8 +469,10 @@ export function defaultSettings(): Settings {
     watchFile: true,
     mica: true,
     contextMenuTargets: ["json_files"],
-    // 默认注册全部支持的扩展名（与 Rust 端默认值一致）
-    associatedExtensions: [...SUPPORTED_EXTS],
+    // 默认不注册任何文件关联（与 Rust 端 Settings::default 保持一致）：
+    // 首次启动不应静默抢占 70+ 种扩展名的默认处理程序，
+    // 由用户在「设置 → 默认打开方式」中显式勾选后注册。
+    associatedExtensions: [],
     autostart: false,
     autostartMinimized: true,
     recentFiles: [],

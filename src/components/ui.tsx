@@ -261,22 +261,6 @@ export const Checkbox: React.FC<{
   </label>
 );
 
-// ============ 进度条 ============
-
-export const ProgressBar: React.FC<{ indeterminate?: boolean; value?: number }> = ({
-  indeterminate,
-  value = 0,
-}) => (
-  <div className="h-1 rounded-full bg-smoke-bg-subtle overflow-hidden">
-    <div
-      className={`h-full bg-accent rounded-full transition-all duration-300 ${
-        indeterminate ? "w-1/3 animate-pulse" : ""
-      }`}
-      style={indeterminate ? undefined : { width: `${Math.min(100, value)}%` }}
-    />
-  </div>
-);
-
 // ============ 状态徽标 ============
 
 export const Badge: React.FC<{ on?: boolean; onText?: string; offText?: string }> = ({
@@ -303,11 +287,44 @@ export const Dialog: React.FC<{
   footer?: React.ReactNode;
   children: React.ReactNode;
 }> = ({ open, title, onClose, footer, children }) => {
+  const panelRef = React.useRef<HTMLDivElement>(null);
+  const previouslyFocused = React.useRef<HTMLElement | null>(null);
+
+  // Esc 关闭；打开时把焦点移入对话框，关闭时归还给原触发元素
+  React.useEffect(() => {
+    if (!open) return;
+    previouslyFocused.current = document.activeElement as HTMLElement | null;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    // 聚焦到第一个可交互元素（否则焦点仍留在背景内容上）
+    const t = window.setTimeout(() => {
+      const focusables = panelRef.current?.querySelectorAll<HTMLElement>(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+      );
+      (focusables?.[0] ?? panelRef.current)?.focus();
+    }, 0);
+    return () => {
+      window.removeEventListener("keydown", onKey, true);
+      window.clearTimeout(t);
+      previouslyFocused.current?.focus?.();
+    };
+  }, [open, onClose]);
+
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
       <div
-        className="bg-smoke-bg-layer border border-stroke rounded-lg shadow-flyout w-[420px] max-w-[90vw] animate-fade-in"
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        tabIndex={-1}
+        className="bg-smoke-bg-layer border border-stroke rounded-lg shadow-flyout w-[420px] max-w-[90vw] animate-fade-in outline-none"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="px-5 pt-4 pb-2 text-[16px] font-semibold text-ink">{title}</div>

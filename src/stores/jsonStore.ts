@@ -32,7 +32,12 @@ interface JsonState {
   fileKind: FileKind;
   result: ParseResult | null;
   parsing: boolean;
-  expanded: Record<number, boolean>;
+  /**
+   * 折叠状态：按**节点路径**（path）索引，而非节点 id。
+   * 节点 id 是每次解析时按遍历顺序重新分配的，文档头部增删一个键就会整体错位；
+   * 路径则在结构不变时保持稳定。
+   */
+  expanded: Record<string, boolean>;
   selectedId: number | null;
   searchQuery: string;
   searchInKeys: boolean;
@@ -51,6 +56,12 @@ interface JsonState {
   findIndex: number;
   /** 查找栏是否展开 */
   findOpen: boolean;
+  /**
+   * 定位序号：仅在用户**显式**导航查找（下一个/上一个/改查询词）时递增，
+   * 用于触发编辑器重新选中命中位置。文档编辑导致的重算不会递增，
+   * 否则会在用户打字时反复把光标抢走。
+   */
+  findNonce: number;
 
   // actions
   setPanel: (p: PanelKind) => void;
@@ -73,7 +84,7 @@ interface JsonState {
   saveFileAs: () => Promise<void>;
   escapeString: () => void;
   unescapeString: () => void;
-  toggleExpand: (id: number) => void;
+  toggleExpand: (path: string) => void;
   expandTo: (id: number) => void;
   select: (id: number | null) => void;
   setSearch: (q: string) => void;
@@ -85,6 +96,8 @@ interface JsonState {
   closeFind: () => void;
   setFindQuery: (q: string) => void;
   toggleFindCase: () => void;
+  /** 文档内容或活动标签变化后重新计算查找命中（偏移量必须随文本变化） */
+  syncFind: () => void;
   findNext: () => void;
   findPrev: () => void;
   applyFormat: () => Promise<void>;
@@ -170,10 +183,10 @@ export function isTabDirty(t: Tab): boolean {
 }
 
 /** 自动展开策略：根 + 前两层 */
-function autoExpand(nodes: FlatNode[]): Record<number, boolean> {
-  const expanded: Record<number, boolean> = {};
+function autoExpand(nodes: FlatNode[]): Record<string, boolean> {
+  const expanded: Record<string, boolean> = {};
   for (const n of nodes) {
-    if (n.depth <= 1 && n.has_children) expanded[n.id] = true;
+    if (n.depth <= 1 && n.has_children) expanded[n.path] = true;
   }
   return expanded;
 }
@@ -202,6 +215,7 @@ export const useJsonStore = create<JsonState>((set, get) => ({
   findMatches: [],
   findIndex: -1,
   findOpen: false,
+  findNonce: 0,
 
   setPanel: (p) => set({ panel: p }),
 
@@ -230,23 +244,37 @@ export const useJsonStore = create<JsonState>((set, get) => ({
       // 允许删到零个页面（包括最后一个空白页）
       const activeTabId =
         s.activeTabId === id ? (tabs.length ? tabs[tabs.length - 1].id : null) : s.activeTabId;
+      // 关闭的是当前标签：解析结果/折叠/选中/命中都属于被关闭的文档，必须一并清空，
+      // 否则新标签会短暂显示旧文档的 JSON 错误行
+      const closedActive = s.activeTabId === id;
       return {
         tabs,
         activeTabId,
-        result: tabs.length ? s.result : null,
-        searchHits: tabs.length ? s.searchHits : [],
-        selectedId: tabs.length ? s.selectedId : null,
+        result: closedActive ? null : s.result,
+        expanded: closedActive ? {} : s.expanded,
+        searchHits: closedActive ? [] : s.searchHits,
+        selectedId: closedActive ? null : s.selectedId,
         ...docStateFor(tabs.find((t) => t.id === activeTabId), s.view),
       };
     });
+    // 释放该标签的撤销历史，避免长期运行时无界增长
+    histories.delete(id);
+    get().syncFind();
     void get().reparse();
   },
 
   switchTab: (id) => {
     set((s) => ({
       activeTabId: id,
+      // 切换标签：折叠/选中/命中均按文档维度，跨标签复用会导致展开错位与错误高亮
+      expanded: {},
+      selectedId: null,
+      searchHits: [],
+      result: null,
       ...docStateFor(s.tabs.find((t) => t.id === id), s.view),
     }));
+    // 命中偏移是相对文本的：换文档后必须重算
+    get().syncFind();
     void get().reparse();
   },
 
@@ -334,9 +362,13 @@ export const useJsonStore = create<JsonState>((set, get) => ({
     if (now - h.lastEditAt > EDIT_COALESCE_MS) {
       h.undo.push(prevText);
       if (h.undo.length > HISTORY_LIMIT) h.undo.shift();
-      h.redo.length = 0;
     }
+    // 任何新编辑都必须作废重做栈——否则「撤销 → 继续输入 → 重做」会用旧内容
+    // 覆盖用户刚输入的字符，造成静默丢字。
+    h.redo.length = 0;
     h.lastEditAt = now;
+    // 文本已变：查找命中偏移必须重算，否则会跳到错误位置
+    get().syncFind();
     // 防抖解析：连续输入时不逐键触发
     if (reparseTimer) clearTimeout(reparseTimer);
     reparseTimer = setTimeout(() => {
@@ -361,6 +393,7 @@ export const useJsonStore = create<JsonState>((set, get) => ({
       tabs: st.tabs.map((t) => (t.id === tab.id ? { ...t, text: prev } : t)),
       statusMessage: "已撤销",
     }));
+    get().syncFind();
     void get().reparse();
   },
 
@@ -380,6 +413,7 @@ export const useJsonStore = create<JsonState>((set, get) => ({
       tabs: st.tabs.map((t) => (t.id === tab.id ? { ...t, text: next } : t)),
       statusMessage: "已重做",
     }));
+    get().syncFind();
     void get().reparse();
   },
 
@@ -413,11 +447,12 @@ export const useJsonStore = create<JsonState>((set, get) => ({
     try {
       const result = await api.parseJson(tab.text, parseMode);
       if (seq !== reparseSeq) return; // 已有更新的解析在途/完成，丢弃过期结果
-      // 保留用户手动展开/折叠的状态；仅对新节点套用默认展开
+      // 保留用户手动展开/折叠的状态；仅对新节点套用默认展开。
+      // 按**路径**合并（而非节点 id）：id 会随文档头部增删整体错位。
       const prev = get().expanded;
       const merged = autoExpand(result.nodes);
       for (const n of result.nodes) {
-        if (n.id in prev) merged[n.id] = prev[n.id];
+        if (n.path in prev) merged[n.path] = prev[n.path];
       }
       set({
         result,
@@ -432,8 +467,8 @@ export const useJsonStore = create<JsonState>((set, get) => ({
     }
   },
 
-  toggleExpand: (id) =>
-    set((s) => ({ expanded: { ...s.expanded, [id]: !s.expanded[id] } })),
+  toggleExpand: (path) =>
+    set((s) => ({ expanded: { ...s.expanded, [path]: !s.expanded[path] } })),
 
   saveFile: async () => {
     const { activeTabId, tabs } = get();
@@ -513,14 +548,18 @@ export const useJsonStore = create<JsonState>((set, get) => ({
     }
   },
 
-  expandTo: (id) => {    const { result } = get();
+  expandTo: (id) => {
+    const { result } = get();
     if (!result) return;
     const byId = new Map(result.nodes.map((n) => [n.id, n]));
     const expanded = { ...get().expanded };
     let cur = byId.get(id);
+    // 展开命中节点的所有祖先（按路径索引）
     while (cur && cur.parent !== null) {
-      expanded[cur.parent] = true;
-      cur = byId.get(cur.parent);
+      const parent = byId.get(cur.parent);
+      if (!parent) break;
+      expanded[parent.path] = true;
+      cur = parent;
     }
     set({ expanded, selectedId: id, panel: "viewer", view: "tree" });
   },
@@ -570,7 +609,28 @@ export const useJsonStore = create<JsonState>((set, get) => ({
       findQuery: q,
       findMatches: matches,
       findIndex: matches.length ? 0 : -1,
+      findNonce: s.findNonce + 1,
       statusMessage: q ? `查找命中 ${matches.length} 处` : "",
+    });
+  },
+
+  // 文本或标签变化后重算命中：命中位置是字符偏移，
+  // 文本一变旧偏移就指向错误位置（甚至越界）。
+  // 注意：不递增 findNonce —— 用户正在打字时不能把光标抢到命中处。
+  syncFind: () => {
+    const s = get();
+    if (!s.findOpen || !s.findQuery) {
+      if (s.findMatches.length || s.findIndex !== -1) {
+        set({ findMatches: [], findIndex: -1 });
+      }
+      return;
+    }
+    const tab = s.tabs.find((t) => t.id === s.activeTabId);
+    const text = tab?.text ?? "";
+    const matches = findAll(text, s.findQuery, s.findCaseSensitive);
+    set({
+      findMatches: matches,
+      findIndex: matches.length ? Math.min(s.findIndex, matches.length - 1) : -1,
     });
   },
 
@@ -584,6 +644,7 @@ export const useJsonStore = create<JsonState>((set, get) => ({
       findCaseSensitive: caseSensitive,
       findMatches: matches,
       findIndex: matches.length ? 0 : -1,
+      findNonce: s.findNonce + 1,
     });
   },
 
@@ -591,14 +652,22 @@ export const useJsonStore = create<JsonState>((set, get) => ({
     const s = get();
     if (!s.findMatches.length) return;
     const idx = s.findIndex < 0 ? 0 : (s.findIndex + 1) % s.findMatches.length;
-    set({ findIndex: idx, statusMessage: `查找命中 ${s.findMatches.length} 处（第 ${idx + 1} 处）` });
+    set({
+      findIndex: idx,
+      findNonce: s.findNonce + 1,
+      statusMessage: `查找命中 ${s.findMatches.length} 处（第 ${idx + 1} 处）`,
+    });
   },
 
   findPrev: () => {
     const s = get();
     if (!s.findMatches.length) return;
     const idx = s.findIndex <= 0 ? s.findMatches.length - 1 : s.findIndex - 1;
-    set({ findIndex: idx, statusMessage: `查找命中 ${s.findMatches.length} 处（第 ${idx + 1} 处）` });
+    set({
+      findIndex: idx,
+      findNonce: s.findNonce + 1,
+      statusMessage: `查找命中 ${s.findMatches.length} 处（第 ${idx + 1} 处）`,
+    });
   },
 
   setQueryExpr: (e) => set({ queryExpr: e }),

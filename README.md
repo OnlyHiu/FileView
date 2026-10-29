@@ -90,11 +90,13 @@ npm run dev          # 仅浏览器预览（JS 降级解析）
 测试与打包：
 
 ```bash
-cd src-tauri && cargo test   # Rust 单元测试（解析/格式化/JSONPath/注册表）
-npm run tauri:build          # 打包 exe + NSIS 安装器
+npm test                      # 前端纯逻辑测试（Node 内置 test runner）
+cd src-tauri && cargo test    # Rust 单元测试（解析/格式化/JSONPath/注册表）
+npm run tauri:build           # 打包 exe + NSIS 安装器
 ```
 
 > 依赖：Node 18+、Rust stable-msvc、VS Build Tools 2022（C++ 工作负载）、WebView2 运行时（Win11 自带）。
+> Rust 测试中的注册表操作被重定向到 `HKCU\Software\FileViewTests` 沙箱，**不会影响系统设置**。
 
 ## 📁 项目结构
 
@@ -112,7 +114,8 @@ npm run tauri:build          # 打包 exe + NSIS 安装器
 ├── push.bat                # 一键推送到仓库
 ├── docs/DESIGN-PLAN.md     # 设计计划
 ├── docs/PLAN-v0.2.0.md      # v0.2.0 需求计划
-```
+├── docs/RELEASE-v0.2.0.md  # v0.2.0 发行说明
+└── docs/AUDIT-v0.2.0.md    # v0.2.0 代码审核报告
 
 ## 🔗 系统集成实现说明
 
@@ -122,8 +125,10 @@ npm run tauri:build          # 打包 exe + NSIS 安装器
 - 文件关联：注册 ProgID（`HKCU\Software\Classes\FileView.json` 等）+ `OpenWithProgids` +
   Capabilities/RegisteredApplications；**不伪造 UserChoice**（Windows 哈希保护），
   通过 `ms-settings:defaultapps` 引导用户确认默认应用。
-- 启动时按设置幂等注入系统集成，并自动迁移/清理旧品牌注册表痕迹。
-- 所有变更后调用 `SHChangeNotify(SHCNE_ASSOCCHANGED)` 即时刷新资源管理器。
+- **文件关联需用户显式勾选后注册**（首次启动不会自动抢占任何扩展名的默认处理程序）。
+- 启动时按设置幂等注入系统集成，并自动迁移/清理旧品牌注册表痕迹（仅清理确属本应用旧版本的键）。
+- 所有变更后调用 `SHChangeNotify(SHCNE_ASSOCCHANGED)` 即时刷新资源管理器；
+  批量注册时只广播一次，避免 Explorer 反复重读。
 
 ## 📜 许可证
 

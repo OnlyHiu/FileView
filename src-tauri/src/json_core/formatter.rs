@@ -20,17 +20,21 @@ impl Indent {
 }
 
 /// JSONL：逐行处理，行序保持不变
+///
+/// 与 parser::parse 保持一致：用 `split('\n')` 分行并单独剥离 `\r`，
+/// 这样 CRLF 文件的行号与解析结果完全对应。
 fn map_jsonl_lines(
     text: &str,
     f: impl Fn(&Value) -> Result<String, String>,
 ) -> Result<String, String> {
     let mut out: Vec<String> = Vec::new();
-    for (idx, line) in text.lines().enumerate() {
-        let t = line.trim();
-        if t.is_empty() {
+    for (idx, seg) in text.split('\n').enumerate() {
+        let content = seg.strip_suffix('\r').unwrap_or(seg);
+        if content.trim().is_empty() {
             continue;
         }
-        let v: Value = serde_json::from_str(t).map_err(|e| format!("第 {} 行解析失败: {}", idx + 1, e))?;
+        let v: Value = serde_json::from_str(content.trim())
+            .map_err(|e| format!("第 {} 行解析失败: {}", idx + 1, e))?;
         out.push(f(&v)?);
     }
     Ok(out.join("\n"))
@@ -103,33 +107,6 @@ fn serialize_with_indent(value: &Value, indent: &Indent) -> Result<String, Strin
     Ok(out)
 }
 
-/// 校验：仅返回诊断，不产生输出（支持严格 / JSONC / JSONL）
-pub fn validate(text: &str, mode: ParseMode) -> Result<(), (usize, usize, String)> {
-    match mode {
-        ParseMode::Jsonl => {
-            for (idx, line) in text.lines().enumerate() {
-                let content = line; // lines() 已剥 '\r'
-                if content.trim().is_empty() {
-                    continue;
-                }
-                if let Err(e) = serde_json::from_str::<Value>(content) {
-                    return Err((idx + 1, e.column(), e.to_string()));
-                }
-            }
-            Ok(())
-        }
-        ParseMode::Jsonc => {
-            let eff = super::parser::strip_jsonc(text);
-            serde_json::from_str::<Value>(&eff)
-                .map(|_| ())
-                .map_err(|e| (e.line(), e.column(), e.to_string()))
-        }
-        ParseMode::Strict => serde_json::from_str::<Value>(text)
-            .map(|_| ())
-            .map_err(|e| (e.line(), e.column(), e.to_string())),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -162,12 +139,6 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_error() {
-        let err = validate("{\"a\": }", ParseMode::Strict).unwrap_err();
-        assert_eq!(err.0, 1);
-    }
-
-    #[test]
     fn test_format_jsonc() {
         let out = format("{\n// 注释\n\"a\":1,\n}", ParseMode::Jsonc, &Indent::Spaces(2)).unwrap();
         assert!(out.contains("\"a\": 1"), "{}", out);
@@ -184,11 +155,5 @@ mod tests {
         let out = sort_keys("{\"b\":1,\"a\":2}\n{\"d\":1,\"c\":2}", ParseMode::Jsonl, &Indent::Spaces(2)).unwrap();
         assert!(out.find("\"a\"").unwrap() < out.find("\"b\"").unwrap());
         assert!(out.find("\"c\"").unwrap() < out.find("\"d\"").unwrap());
-    }
-
-    #[test]
-    fn test_validate_jsonl_reports_line() {
-        let err = validate("{\"a\":1}\n{\"b\": }", ParseMode::Jsonl).unwrap_err();
-        assert_eq!(err.0, 2);
     }
 }

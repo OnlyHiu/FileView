@@ -59,7 +59,7 @@ export const TreeView: React.FC = () => {
     while (stack.length) {
       const n = stack.pop()!;
       out.push(n);
-      if (n.has_children && expanded[n.id]) {
+      if (n.has_children && expanded[n.path]) {
         const kids = childrenOf.get(n.id) ?? [];
         for (let i = kids.length - 1; i >= 0; i--) stack.push(kids[i]);
       }
@@ -99,7 +99,7 @@ export const TreeView: React.FC = () => {
             <div
               key={n.id}
               onClick={() => select(n.id)}
-              onDoubleClick={() => n.has_children && toggleExpand(n.id)}
+              onDoubleClick={() => n.has_children && toggleExpand(n.path)}
               className={`absolute left-0 top-0 flex items-center gap-1 pr-3 cursor-default fluent-item ${
                 isSelected ? "bg-accent-subtle" : ""
               }`}
@@ -114,7 +114,7 @@ export const TreeView: React.FC = () => {
               <button
                 onClick={(e) => {
                   e.stopPropagation();
-                  if (n.has_children) toggleExpand(n.id);
+                  if (n.has_children) toggleExpand(n.path);
                 }}
                 className={`w-4 h-4 flex items-center justify-center rounded-sm text-ink-secondary hover:bg-smoke-bg-card-hover ${
                   n.has_children ? "" : "invisible"
@@ -124,7 +124,7 @@ export const TreeView: React.FC = () => {
                   name="chevron"
                   size={11}
                   className={`transition-transform duration-150 ${
-                    expanded[n.id] ? "rotate-90" : ""
+                    expanded[n.path] ? "rotate-90" : ""
                   }`}
                 />
               </button>

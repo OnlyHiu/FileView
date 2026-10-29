@@ -79,6 +79,7 @@ export default function App() {
   const findQuery = useJsonStore((s) => s.findQuery);
   const findMatches = useJsonStore((s) => s.findMatches);
   const findIndex = useJsonStore((s) => s.findIndex);
+  const findNonce = useJsonStore((s) => s.findNonce);
   const findNext = useJsonStore((s) => s.findNext);
 
   const settings = useSettingsStore((s) => s.settings);
@@ -87,7 +88,6 @@ export default function App() {
   const [theme, setTheme] = useState<"light" | "dark">("light");
   const [aboutOpen, setAboutOpen] = useState(false);
   const [panelWidth, setPanelWidth] = useState(460);
-  const [revealNonce, setRevealNonce] = useState(0);
 
   // ============ 启动：主题 → 载入文档 → 显示窗口（避免启动白闪） ============
   const revealedRef = useRef(false);
@@ -545,18 +545,14 @@ export default function App() {
     return map;
   }, [result, fileKind]);
 
-  // 查找定位：命中下标变化时刷新定位序号
-  useEffect(() => {
-    if (!findOpen || findIndex < 0) return;
-    setRevealNonce((n) => n + 1);
-  }, [findOpen, findIndex, findQuery]);
-
+  // 查找定位：由 store 的 findNonce 驱动，仅在用户显式导航查找时重新定位，
+  // 避免编辑文档时把光标抢走。
   const revealTarget =
     findOpen && findIndex >= 0 && findMatches[findIndex] !== undefined
       ? {
           start: findMatches[findIndex],
           end: findMatches[findIndex] + findQuery.length,
-          nonce: revealNonce,
+          nonce: findNonce,
         }
       : null;
 

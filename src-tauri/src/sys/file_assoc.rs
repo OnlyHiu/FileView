@@ -71,8 +71,35 @@ pub fn clear_capabilities() {
     }
 }
 
-/// 注册某扩展名的文件关联
-pub fn register(ext: &str) -> Result<String, String> {
+/// 批量注册：只刷新一次 Capabilities、只广播一次 Shell 通知。
+///
+/// 逐个调用 register() 会导致每个扩展名都触发一次能力表重建与
+/// `SHCNE_ASSOCCHANGED` 广播（70+ 次 Explorer 全量重读），启动明显卡顿。
+pub fn register_many(exts: &[String]) -> Result<Vec<String>, String> {
+    // 先整体校验：任何一个扩展名不支持就整体放弃，
+    // 避免出现「一半注册成功、一半失败」的中间状态。
+    let mut normalized = Vec::with_capacity(exts.len());
+    for ext in exts {
+        let e = ext.trim_start_matches('.');
+        if !SUPPORTED_EXTS.contains(&e) {
+            return Err(format!("不支持的扩展名: {}", ext));
+        }
+        normalized.push(e.to_string());
+    }
+    let mut done = Vec::new();
+    for ext in &normalized {
+        register_internal(ext)?;
+        done.push(ext.clone());
+    }
+    if !done.is_empty() {
+        let _ = refresh_capabilities();
+        registry::notify_shell_assoc_changed();
+    }
+    Ok(done)
+}
+
+/// 注册单个扩展名（不含能力表刷新与 Shell 广播）
+fn register_internal(ext: &str) -> Result<(), String> {
     let ext = ext.trim_start_matches('.');
     if !SUPPORTED_EXTS.contains(&ext) {
         return Err(format!("不支持的扩展名: {}", ext));
@@ -120,15 +147,40 @@ pub fn register(ext: &str) -> Result<String, String> {
 
     registry::record_managed_key(&pid_path).map_err(|e| e.to_string())?;
     registry::record_managed_key(&ext_path).map_err(|e| e.to_string())?;
-    // 让 Windows「默认应用」能列出并切换到本应用
-    let _ = refresh_capabilities();
-    registry::notify_shell_assoc_changed();
-    Ok(ext.to_string())
+    Ok(())
 }
 
-/// 注销某扩展名的文件关联
-pub fn unregister(ext: &str) -> Result<String, String> {
+/// 批量注销：只刷新一次能力表、只广播一次 Shell 通知。
+pub fn unregister_many(exts: &[String]) -> Result<Vec<String>, String> {
+    // 同样先整体校验，保证批量操作的一致性
+    let mut normalized = Vec::with_capacity(exts.len());
+    for ext in exts {
+        let e = ext.trim_start_matches('.');
+        if !SUPPORTED_EXTS.contains(&e) {
+            return Err(format!("不支持的扩展名: {}", ext));
+        }
+        normalized.push(e.to_string());
+    }
+    let mut done = Vec::new();
+    for ext in &normalized {
+        unregister_internal(ext)?;
+        done.push(ext.clone());
+    }
+    if !done.is_empty() {
+        let _ = refresh_capabilities();
+        registry::notify_shell_assoc_changed();
+    }
+    Ok(done)
+}
+
+/// 注销单个扩展名（不含能力表刷新与 Shell 广播）
+fn unregister_internal(ext: &str) -> Result<(), String> {
     let ext = ext.trim_start_matches('.');
+    // 与 register 对称：只允许处理受支持的扩展名，
+    // 避免 settings.json 被手工改成任意字符串后误删同名键。
+    if !SUPPORTED_EXTS.contains(&ext) {
+        return Err(format!("不支持的扩展名: {}", ext));
+    }
     let pid = prog_id(ext);
     let pid_path = format!(r"Software\Classes\{}", pid);
     if registry::key_exists(&pid_path) {
@@ -149,9 +201,7 @@ pub fn unregister(ext: &str) -> Result<String, String> {
     // 注入已移除，同步清理受管理清单记录，避免计数虚高
     let _ = registry::forget_managed_key(&pid_path);
     let _ = registry::forget_managed_key(&ext_path);
-    let _ = refresh_capabilities();
-    registry::notify_shell_assoc_changed();
-    Ok(ext.to_string())
+    Ok(())
 }
 
 /// 查询各扩展名的注册状态
@@ -189,6 +239,18 @@ pub fn open_default_apps_settings() -> Result<(), String> {
 mod tests {
     use super::*;
 
+    /// 注册单个扩展名（测试辅助）
+    fn register(ext: &str) -> Result<String, String> {
+        register_many(&[ext.to_string()])
+            .map(|v| v.into_iter().next().unwrap_or_default())
+    }
+
+    /// 注销单个扩展名（测试辅助）
+    fn unregister(ext: &str) -> Result<String, String> {
+        unregister_many(&[ext.to_string()])
+            .map(|v| v.into_iter().next().unwrap_or_default())
+    }
+
     #[test]
     fn test_register_unregister_json() {
         let _g = super::super::registry::test_support::lock();
@@ -201,6 +263,8 @@ mod tests {
     #[test]
     fn test_reject_unknown_ext() {
         assert!(register("xyz").is_err());
+        // 注销同样必须校验扩展名（对称性）
+        assert!(unregister("xyz").is_err());
     }
 
     #[test]
@@ -231,5 +295,13 @@ mod tests {
         let v: String = ext_key.get_value("").unwrap();
         assert_eq!(v, prog_id("md"));
         assert!(unregister("md").is_ok());
+    }
+
+    #[test]
+    fn test_register_many_is_atomic_on_unsupported_ext() {
+        // 批量注册遇到不支持的扩展名必须报错，而不是部分成功
+        let _g = super::super::registry::test_support::lock();
+        let res = register_many(&["json".to_string(), "xyz".to_string()]);
+        assert!(res.is_err());
     }
 }

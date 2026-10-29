@@ -17,7 +17,8 @@ export const MarkdownPreview: React.FC = () => {
     if (!a) return;
     e.preventDefault();
     const url = a.getAttribute("href") ?? "";
-    if (!url || url === "#") return;
+    // 仅允许 http/https/mailto 交给系统浏览器；其余（相对路径、锚点等）留在文档内
+    if (!/^(?:https?:|mailto:)/i.test(url)) return;
     if (isTauri()) {
       void import("@tauri-apps/plugin-opener")
         .then((m) => m.openUrl(url))

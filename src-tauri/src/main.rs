@@ -82,11 +82,6 @@ fn query_json(text: String, expr: String, mode: String) -> Result<Vec<String>, S
     json_core::query::query(&text, &expr, parse_mode_of(&mode))
 }
 
-#[tauri::command]
-fn validate_json(text: String, mode: String) -> Result<(), (usize, usize, String)> {
-    json_core::formatter::validate(&text, parse_mode_of(&mode))
-}
-
 // ============ 文件命令 ============
 
 #[tauri::command]
@@ -196,20 +191,13 @@ fn uninstall_context_menu() -> Result<Vec<String>, String> {
 
 #[tauri::command]
 fn register_file_associations(exts: Vec<String>) -> Result<Vec<String>, String> {
-    let mut out = Vec::new();
-    for e in exts {
-        out.push(sys::file_assoc::register(&e)?);
-    }
-    Ok(out)
+    // 批量注册：只触发一次能力表刷新与一次 Shell 广播
+    sys::file_assoc::register_many(&exts)
 }
 
 #[tauri::command]
 fn unregister_file_associations(exts: Vec<String>) -> Result<Vec<String>, String> {
-    let mut out = Vec::new();
-    for e in exts {
-        out.push(sys::file_assoc::unregister(&e)?);
-    }
-    Ok(out)
+    sys::file_assoc::unregister_many(&exts)
 }
 
 #[tauri::command]
@@ -225,11 +213,6 @@ fn open_default_apps_settings() -> Result<(), String> {
 #[tauri::command]
 fn cleanup_system_integration() -> Result<sys::IntegrationStatus, String> {
     sys::cleanup_all()
-}
-
-#[tauri::command]
-fn supported_extensions() -> Vec<String> {
-    sys::file_assoc::SUPPORTED_EXTS.iter().map(|s| s.to_string()).collect()
 }
 
 // ============ 启动 ============
@@ -270,9 +253,10 @@ fn main() {
             sys::migrate_legacy_brand();
             let loaded = settings::load(&config_dir);
             // 按设置幂等注入系统集成：注册表被外部清理或设置被离线修改后，启动即恢复，
-            // 保证设置页勾选的文件关联/右键菜单「设置了就生效」
-            for ext in &loaded.associated_extensions {
-                let _ = sys::file_assoc::register(ext);
+            // 保证设置页勾选的文件关联/右键菜单「设置了就生效」。
+            // 批量注册：避免每个扩展名都触发一次能力表重建与 Shell 广播。
+            if !loaded.associated_extensions.is_empty() {
+                let _ = sys::file_assoc::register_many(&loaded.associated_extensions);
             }
             if !loaded.context_menu_targets.is_empty() {
                 let list: Vec<sys::context_menu::MenuTarget> = loaded
@@ -301,7 +285,6 @@ fn main() {
             minify_json,
             sort_keys_json,
             query_json,
-            validate_json,
             read_file_text,
             write_file_text,
             get_file_mtime,
@@ -316,7 +299,6 @@ fn main() {
             set_autostart,
             open_default_apps_settings,
             cleanup_system_integration,
-            supported_extensions,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

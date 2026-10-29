@@ -246,36 +246,88 @@ export function tokenizeToml(src: string): Token[] {
 
 // ============ CSV ============
 
-/** CSV：表头行作为键名，其余为值 */
+/**
+ * CSV：表头行作为键名，其余为值
+ *
+ * 注意：token 的 text 必须与源文本**逐字符对应**——编辑器用高亮层与
+ * 透明 textarea 叠加显示，两者错位会导致光标与内容对不上。
+ * 因此这里按原样切分单元格（保留引号与分隔符），只把「类型着色」应用到值上。
+ */
 export function tokenizeCsv(src: string): Token[] {
   const tokens: Token[] = [];
   const lines = src.split("\n");
+  const delimiter = detectCsvDelimiter(src);
   lines.forEach((line, idx) => {
     const nl = idx < lines.length - 1 ? "\n" : "";
-    const cells = splitCsvLine(line);
-    if (idx === 0) {
-      cells.forEach((c, i) => {
-        if (i > 0) tokens.push({ cls: "syn-punct", text: "," });
-        tokens.push({ cls: "syn-keyname", text: c });
-      });
-      tokens.push({ cls: "", text: nl });
-      return;
-    }
+    const cells = splitCsvLineRaw(line, delimiter);
     cells.forEach((c, i) => {
-      if (i > 0) tokens.push({ cls: "syn-punct", text: "," });
-      const t = c.trim();
-      const cls = !t
-        ? ""
-        : /^-?\d+(\.\d+)?$/.test(t)
-          ? "syn-number"
-          : /^(true|false|null)$/i.test(t)
-            ? "syn-bool"
-            : "syn-string";
-      tokens.push({ cls, text: c });
+      // 分隔符片段
+      if (c.separator) {
+        tokens.push({ cls: "syn-punct", text: c.separator });
+        return;
+      }
+      // 值片段（保留原始引号）
+      const value = c.value;
+      const inner = unquote(value);
+      const t = inner.trim();
+      const cls =
+        idx === 0
+          ? "syn-keyname"
+          : !t
+            ? ""
+            : /^-?\d+(\.\d+)?$/.test(t)
+              ? "syn-number"
+              : /^(true|false|null)$/i.test(t)
+                ? "syn-bool"
+                : "syn-string";
+      tokens.push({ cls, text: value });
     });
     tokens.push({ cls: "", text: nl });
   });
   return tokens;
+}
+
+/**
+ * 按分隔符切分，保留原始片段。
+ *
+ * 返回的片段按「值 → 分隔符 → 值 → 分隔符 → …」顺序排列，
+ * 拼接后与源行**完全一致**（引号与分隔符原样保留），
+ * 保证高亮层与透明编辑层像素对齐。
+ */
+function splitCsvLineRaw(line: string, delimiter: string): { separator: string; value: string }[] {
+  const out: { separator: string; value: string }[] = [];
+  let start = 0;
+  let inQuote = false;
+  let i = 0;
+  while (i < line.length) {
+    const ch = line[i];
+    if (inQuote) {
+      if (ch === '"') {
+        // "" 为转义的双引号，仍在引号内
+        if (line[i + 1] === '"') i += 1;
+        else inQuote = false;
+      }
+    } else if (ch === '"') {
+      inQuote = true;
+    } else if (line.startsWith(delimiter, i)) {
+      out.push({ separator: "", value: line.slice(start, i) });
+      out.push({ separator: delimiter, value: "" });
+      i += delimiter.length;
+      start = i;
+      continue;
+    }
+    i += 1;
+  }
+  out.push({ separator: "", value: line.slice(start) });
+  return out;
+}
+
+/** 去掉单元格外层引号（仅用于类型判断） */
+function unquote(v: string): string {
+  if (v.length >= 2 && v.startsWith('"') && v.endsWith('"')) {
+    return v.slice(1, -1).replace(/""/g, '"');
+  }
+  return v;
 }
 
 /** 拆分一行 CSV（支持双引号包裹与转义双引号） */
@@ -303,6 +355,41 @@ export function splitCsvLine(line: string, delimiter = ","): string[] {
   }
   out.push(cur);
   return out;
+}
+
+/** 候选分隔符（按常见度排序） */
+const CSV_DELIMITERS = [",", "\t", ";", "|"] as const;
+
+/**
+ * 自动识别 CSV 分隔符。
+ *
+ * 策略：取前若干行做「一致性打分」——候选分隔符把每行切成的列数越一致、
+ * 列数越多，就越可能是真正的分隔符。这样可正确处理「值里含逗号但用分号分隔」
+ * 「欧洲风格分号 + 小数点逗号」等情况。
+ */
+export function detectCsvDelimiter(text: string): string {
+  const lines = text
+    .split(/\r?\n/)
+    .filter((l) => l.trim().length > 0)
+    .slice(0, 20);
+  if (!lines.length) return ",";
+
+  let best = ",";
+  let bestScore = -Infinity;
+  for (const delim of CSV_DELIMITERS) {
+    const counts = lines.map((l) => splitCsvLine(l, delim).length);
+    const max = Math.max(...counts);
+    if (max < 2) continue; // 该分隔符切不开任何列 → 不考虑
+    // 一致性：所有行列数是否相同
+    const consistent = counts.every((c) => c === max) ? 1 : 0;
+    // 得分：一致的行越多、列数越多越好
+    const score = consistent * 1000 + max;
+    if (score > bestScore) {
+      bestScore = score;
+      best = delim;
+    }
+  }
+  return best;
 }
 
 // ============ XML / HTML ============
@@ -686,6 +773,30 @@ const CODE_SPECS: Record<CodeLang, CodeSpec> = {
       "dotted", "hidden", "visible", "center", "left", "right", "top", "bottom",
     ]),
     constants: new Set(["true", "false", "null", "initial", "inherit"]),
+  },
+  perl: {
+    lineComment: "#",
+    blockComment: null,
+    quotes: ["'", '"'],
+    keywords: new Set([
+      "sub", "my", "our", "local", "package", "use", "no", "require", "return",
+      "if", "elsif", "else", "unless", "while", "until", "for", "foreach", "do",
+      "last", "next", "redo", "eval", "die", "warn", "print", "printf", "say",
+      "push", "pop", "shift", "unshift", "splice", "join", "split", "map", "grep",
+      "sort", "reverse", "scalar", "defined", "ref", "exists", "delete", "wantarray",
+    ]),
+    constants: new Set(["undef", "1", "0", "__PACKAGE__", "__FILE__", "__LINE__"]),
+  },
+  r: {
+    lineComment: "#",
+    blockComment: null,
+    quotes: ['"', "'"],
+    keywords: new Set([
+      "function", "if", "else", "for", "while", "repeat", "in", "next", "break",
+      "return", "library", "require", "source", "TRUE", "FALSE", "NULL", "NA",
+      "Inf", "NaN", "list", "c", "vector", "matrix", "data.frame", "factor",
+    ]),
+    constants: new Set(["TRUE", "FALSE", "NULL", "NA", "NA_integer_", "NA_real_", "Inf", "NaN"]),
   },
   plain: {
     lineComment: null,

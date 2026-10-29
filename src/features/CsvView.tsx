@@ -2,7 +2,7 @@
 
 import React, { useMemo } from "react";
 import { useJsonStore } from "../stores/jsonStore";
-import { splitCsvLine } from "../lib/highlight";
+import { splitCsvLine, detectCsvDelimiter } from "../lib/highlight";
 
 const MAX_ROWS = 2000;
 
@@ -11,11 +11,11 @@ export const CsvView: React.FC = () => {
   const activeTabId = useJsonStore((s) => s.activeTabId);
   const tab = tabs.find((t) => t.id === activeTabId);
   const text = tab?.text ?? "";
-  const isTsv = /\.tsv$/i.test(tab?.path ?? "");
 
   const { headers, rows, delimiter } = useMemo(() => {
     const lines = text.split(/\r?\n/);
-    const sep = isTsv ? "\t" : ",";
+    // 分隔符自动识别：TSV 文件固定用制表符，其余按内容推断
+    const sep = /\.tsv$/i.test(tab?.path ?? "") ? "\t" : detectCsvDelimiter(text);
     const head = lines.length ? splitCsvLine(lines[0], sep) : [];
     const body: string[][] = [];
     for (let i = 1; i < lines.length && body.length < MAX_ROWS; i++) {
@@ -24,7 +24,7 @@ export const CsvView: React.FC = () => {
       body.push(splitCsvLine(line, sep));
     }
     return { headers: head, rows: body, delimiter: sep };
-  }, [text, isTsv]);
+  }, [text, tab?.path]);
 
   if (!headers.length) {
     return (
