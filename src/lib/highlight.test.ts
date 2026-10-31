@@ -7,7 +7,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { tokenize, detectCsvDelimiter, splitCsvLine } from "./highlight.ts";
+import { tokenize, detectCsvDelimiter, splitCsvLine, mayCarryAcrossLines } from "./highlight.ts";
 
 /** 把 token 拼回原文 */
 function concat(tokens: { text: string }[]): string {
@@ -64,4 +64,38 @@ test("CSV 分隔符自动识别：单列回退为逗号", () => {
 
 test("CSV 拆分保留引号内转义", () => {
   assert.deepEqual(splitCsvLine('"a""b",c'), ['a"b', "c"]);
+});
+
+test("跨行构造检测：不会跨行的语言恒为 false", () => {
+  for (const lang of ["json", "ini", "yaml", "toml", "csv", "log", "text"] as const) {
+    assert.equal(mayCarryAcrossLines("任意内容\n更多内容", lang), false, `${lang} 不应跨行`);
+  }
+});
+
+test("跨行构造检测：Markdown 围栏", () => {
+  assert.equal(mayCarryAcrossLines("普通文本\n没有围栏", "markdown"), false);
+  assert.equal(mayCarryAcrossLines("```js\ncode\n```", "markdown"), true);
+  assert.equal(mayCarryAcrossLines("~~~\ncode\n~~~", "markdown"), true);
+});
+
+test("跨行构造检测：XML / HTML 标签与注释", () => {
+  assert.equal(mayCarryAcrossLines("<div>文本</div>", "xml"), false);
+  // 标签跨行
+  assert.equal(mayCarryAcrossLines("<div\n  class=\"x\">", "xml"), true);
+  // 注释跨行
+  assert.equal(mayCarryAcrossLines("<!-- 注释\n更多 -->", "html"), true);
+});
+
+test("跨行构造检测：代码的块注释与模板串", () => {
+  assert.equal(mayCarryAcrossLines("const a = 1;", "javascript"), false);
+  assert.equal(mayCarryAcrossLines("/* 注释 */", "javascript"), true);
+  assert.equal(mayCarryAcrossLines("const t = `x`;", "javascript"), true);
+  // Python 没有块注释，双引号串不跨行
+  assert.equal(mayCarryAcrossLines("s = \"text\"", "python"), false);
+});
+
+test("跨行构造检测必须保守：宁可误判为可能跨行", () => {
+  // 注释里出现 "<" 与换行：实际不会跨行，但检测结果允许为 true（保守）
+  const src = "<!-- <\n -->";
+  assert.equal(mayCarryAcrossLines(src, "html"), true);
 });

@@ -35,7 +35,7 @@ FileView 是一款 Windows 桌面应用，采用 Notepad++ 的操作逻辑：**�
 
 | 模块 | 说明 |
 |---|---|
-| **多格式查看** | JSON：树形（虚拟滚动）/ 表格（对象数组转表）/ 原始；Markdown：预览 / 源码；YAML·TOML：键结构 / 源码；CSV·TSV：表格；XML：标签树；HTML：沙箱预览；代码文件：符号大纲 / 源码；日志：级别与时间戳着色 |
+| **多格式查看** | JSON：树形（虚拟滚动）/ 表格（对象数组转表）/ 原始；Markdown：预览 / 源码；YAML·TOML：键结构 / 源码；CSV·TSV：表格（自动识别分隔符）；XML：标签树；HTML：沙箱预览；代码文件：符号大纲 / 源码；日志：级别与时间戳着色 |
 | **面板化布局** | 文档区始终显示文本；查看工具 / JSONPath 查询 / 设置均为右侧可拖拽停靠面板，互不遮挡，Esc 一键关闭 |
 | **查找与历史** | 文档内查找（Ctrl+F，Enter 跳转下一处、区分大小写）、撤销 / 重做（Ctrl+Z / Ctrl+Y，600ms 合并连续输入）|
 | **语法高亮** | JSON / Markdown / YAML / TOML / CSV / XML / HTML / 日志 + 20+ 代码家族（JS·TS·Python·Rust·Go·Java·C#·C++…）关键字、类型、函数与内置常量着色 |
@@ -43,6 +43,7 @@ FileView 是一款 Windows 桌面应用，采用 Notepad++ 的操作逻辑：**�
 | **查询** | JSONPath（`$.a.b[0]`、`[*]`、`..key`、`['key']`）+ 全文搜索（键/值，点击跳转树节点）|
 | **编辑保存** | 文档区直接编辑；**Ctrl+S 保存**、Ctrl+Shift+S 另存为、格式化（2/4 空格/Tab）、压缩、键排序、字符串转义 / 反转义（均在「格式化」菜单）|
 | **标签页** | 多标签编辑、脏标记（未保存 •）、空白页可删除、拖拽打开、文件变更自动重载 |
+| **大文件** | 文档区虚拟滚动：只渲染可见行、只对可见区域做语法高亮，数十 MB 的文件也能流畅打开与滚动 |
 | **系统集成** | 右键菜单「用 FileView 打开」、文件关联与默认应用注册、开机自启、一键清理（注册表无残留）|
 
 ## 📄 支持格式
@@ -95,6 +96,14 @@ cd src-tauri && cargo test    # Rust 单元测试（解析/格式化/JSONPath/�
 npm run tauri:build           # 打包 exe + NSIS 安装器
 ```
 
+辅助脚本：
+
+```bash
+node scripts/check-ext-sync.mjs   # 前后端扩展名清单一致性校验
+node scripts/check-csp.mjs        # 确认 CSP 已嵌入编译产物
+node scripts/bench-highlight.mjs  # 大文件分词性能基准
+```
+
 > 依赖：Node 18+、Rust stable-msvc、VS Build Tools 2022（C++ 工作负载）、WebView2 运行时（Win11 自带）。
 > Rust 测试中的注册表操作被重定向到 `HKCU\Software\FileViewTests` 沙箱，**不会影响系统设置**。
 
@@ -105,12 +114,12 @@ npm run tauri:build           # 打包 exe + NSIS 安装器
 │   ├── components/ui.tsx   # WinUI 3 风格组件库
 │   ├── features/           # 查看器视图、编辑器、查询、设置页
 │   ├── stores/             # zustand 状态
-│   └── lib/                # Tauri invoke 封装、类型、高亮
+│   └── lib/                # Tauri invoke 封装、类型、高亮（窗口化）
 ├── src-tauri/              # Rust 后端
 │   ├── src/json_core/      # 解析 / 格式化 / JSONPath
 │   ├── src/sys/            # 注册表、右键菜单、文件关联、自启
 │   └── src/main.rs         # Tauri 命令层
-├── scripts/gen-icon.mjs    # 程序化生成应用图标
+├── scripts/                # 辅助脚本（图标生成、一致性校验、性能基准）
 ├── push.bat                # 一键推送到仓库
 ├── docs/DESIGN-PLAN.md     # 设计计划
 ├── docs/PLAN-v0.2.0.md      # v0.2.0 需求计划
@@ -129,6 +138,16 @@ npm run tauri:build           # 打包 exe + NSIS 安装器
 - 启动时按设置幂等注入系统集成，并自动迁移/清理旧品牌注册表痕迹（仅清理确属本应用旧版本的键）。
 - 所有变更后调用 `SHChangeNotify(SHCNE_ASSOCCHANGED)` 即时刷新资源管理器；
   批量注册时只广播一次，避免 Explorer 反复重读。
+
+## 🔒 安全
+
+- 应用配置了**最小化 CSP**（`src-tauri/tauri.conf.json`）：脚本仅允许同源，
+  `object-src` / `base-uri` / `form-action` 一律 `none`，
+  唯一放行的额外来源是 Tauri 的 IPC 通道 `http://ipc.localhost`。
+- Markdown 预览的 HTML 直通走**白名单**：仅保留明确允许的标签与属性，
+  `script` / `iframe` / `object` / `meta` 等危险元素连同内容一并移除，
+  URL 属性只允许 `http(s)` / `mailto` 等安全协议。
+- HTML 预览在 `sandbox=""` 的 iframe 中渲染（无脚本、无表单、独立的 opaque origin）。
 
 ## 📜 许可证
 

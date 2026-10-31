@@ -129,6 +129,13 @@ const histories = new Map<number, TabHistory>();
 const EDIT_COALESCE_MS = 600;
 /** 历史栈上限 */
 const HISTORY_LIMIT = 200;
+/** 超过该长度时，查找命中计算改为防抖（大文档逐键扫描全文会卡顿） */
+const FIND_DEBOUNCE_THRESHOLD = 200_000;
+/** 查找扫描防抖时长（毫秒） */
+const FIND_DEBOUNCE_MS = 200;
+
+/** 查找扫描防抖定时器 */
+let findScanTimer: ReturnType<typeof setTimeout> | null = null;
 
 function historyOf(tabId: number): TabHistory {
   let h = histories.get(tabId);
@@ -604,6 +611,12 @@ export const useJsonStore = create<JsonState>((set, get) => ({
     const s = get();
     const tab = s.tabs.find((t) => t.id === s.activeTabId);
     const text = tab?.text ?? "";
+    // 大文档逐键扫描全文会明显卡顿：命中计算防抖，查询词本身立即生效
+    if (text.length > FIND_DEBOUNCE_THRESHOLD) {
+      set({ findQuery: q });
+      scheduleFindScan(q, s.findCaseSensitive);
+      return;
+    }
     const matches = findAll(text, q, s.findCaseSensitive);
     set({
       findQuery: q,
@@ -627,6 +640,10 @@ export const useJsonStore = create<JsonState>((set, get) => ({
     }
     const tab = s.tabs.find((t) => t.id === s.activeTabId);
     const text = tab?.text ?? "";
+    if (text.length > FIND_DEBOUNCE_THRESHOLD) {
+      scheduleFindScan(s.findQuery, s.findCaseSensitive);
+      return;
+    }
     const matches = findAll(text, s.findQuery, s.findCaseSensitive);
     set({
       findMatches: matches,
@@ -639,6 +656,11 @@ export const useJsonStore = create<JsonState>((set, get) => ({
     const tab = s.tabs.find((t) => t.id === s.activeTabId);
     const text = tab?.text ?? "";
     const caseSensitive = !s.findCaseSensitive;
+    if (text.length > FIND_DEBOUNCE_THRESHOLD) {
+      set({ findCaseSensitive: caseSensitive });
+      scheduleFindScan(s.findQuery, caseSensitive);
+      return;
+    }
     const matches = findAll(text, s.findQuery, caseSensitive);
     set({
       findCaseSensitive: caseSensitive,
@@ -747,6 +769,31 @@ async function getIndent(): Promise<string> {
   } catch {
     return "2";
   }
+}
+
+/**
+ * 防抖执行查找扫描（大文档用）。
+ *
+ * 查询词立即写入状态（输入框即时回显），命中位置稍后补算，
+ * 避免每敲一个字符就扫描整篇文档。
+ */
+function scheduleFindScan(query: string, caseSensitive: boolean): void {
+  if (findScanTimer) clearTimeout(findScanTimer);
+  findScanTimer = setTimeout(() => {
+    findScanTimer = null;
+    const s = useJsonStore.getState();
+    // 查询词已变则丢弃本次结果
+    if (s.findQuery !== query || s.findCaseSensitive !== caseSensitive) return;
+    const tab = s.tabs.find((t) => t.id === s.activeTabId);
+    const text = tab?.text ?? "";
+    const matches = findAll(text, query, caseSensitive);
+    useJsonStore.setState({
+      findMatches: matches,
+      findIndex: matches.length ? 0 : -1,
+      findNonce: s.findNonce + 1,
+      statusMessage: query ? `查找命中 ${matches.length} 处` : "",
+    });
+  }, FIND_DEBOUNCE_MS);
 }
 
 /** 找出所有匹配位置（字符偏移） */

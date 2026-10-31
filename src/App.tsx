@@ -526,13 +526,8 @@ export default function App() {
 
   const activeTab = tabs.find((t) => t.id === activeTabId);
   const activeText = activeTab?.text ?? "";
-  const textStats = useMemo(() => {
-    let lines = activeText ? 1 : 0;
-    for (let i = 0; i < activeText.length; i++) if (activeText.charCodeAt(i) === 10) lines += 1;
-    return { lines, bytes: activeText.length };
-  }, [activeText]);
-  const textLines = textStats.lines;
-  const textBytes = textStats.bytes;
+  const textLines = useLineCount(activeText);
+  const textBytes = activeText.length;
   const isDocEmpty = activeText.trim() === "";
 
   // JSON 诊断 → 出错行
@@ -1102,4 +1097,35 @@ function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   return `${(n / 1024 / 1024).toFixed(2)} MB`;
+}
+
+/** 超过该长度时，行数统计改为防抖计算（大文件逐键扫描会拖慢输入） */
+const LINE_COUNT_DEBOUNCE_THRESHOLD = 200_000;
+
+/**
+ * 统计文本行数。
+ *
+ * 小文件直接算；大文件防抖——否则每次按键都要扫描整篇文本（数十 MB），
+ * 状态栏的行数会明显拖慢输入（它只是展示用途，稍有延迟无妨）。
+ */
+function useLineCount(text: string): number {
+  const countLines = useCallback(
+    (s: string) => {
+      if (!s) return 0;
+      let lines = 1;
+      for (let i = 0; i < s.length; i++) if (s.charCodeAt(i) === 10) lines += 1;
+      return lines;
+    },
+    []
+  );
+  const [count, setCount] = useState(() => countLines(text));
+  useEffect(() => {
+    if (text.length <= LINE_COUNT_DEBOUNCE_THRESHOLD) {
+      setCount(countLines(text));
+      return;
+    }
+    const timer = window.setTimeout(() => setCount(countLines(text)), 300);
+    return () => window.clearTimeout(timer);
+  }, [text, countLines]);
+  return count;
 }

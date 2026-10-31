@@ -1,9 +1,14 @@
 // 文档区源码编辑器：行号 + 语法高亮 + 透明编辑层
-// 被文档区（默认视图）与「查看工具 → 原始」共用
+//
+// 采用**虚拟滚动**：只渲染可见区域，行号与高亮层都按窗口生成。
+// 大文件（数十 MB）因此也能流畅打开与滚动——此前的实现会为每一行
+// 生成一个 DOM 节点、并对全文分词，打开即卡死。
+//
+// 被文档区（默认视图）与「查看工具 → 原始」共用。
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { tokenize } from "../lib/highlight";
+import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { useSettingsStore } from "../stores/settingsStore";
+import { WindowHighlighter, visibleLineRange } from "../lib/highlightWindow";
 import type { Lang } from "../lib/types";
 
 export interface RevealTarget {
@@ -14,6 +19,9 @@ export interface RevealTarget {
   /** 递增序号，用于同位置重复触发 */
   nonce: number;
 }
+
+/** 视口外额外渲染的行数，避免快速滚动时露出空白 */
+const OVERSCAN = 20;
 
 export const SourceEditor: React.FC<{
   text: string;
@@ -28,44 +36,85 @@ export const SourceEditor: React.FC<{
   /** 文档为空时自动聚焦，便于直接粘贴内容 */
   autoFocus?: boolean;
 }> = ({ text, lang, onChange, errorLines, readOnly = false, reveal = null, autoFocus = false }) => {
-  const tokens = useMemo(() => tokenize(text, lang), [text, lang]);
-  const lines = useMemo(() => text.split("\n"), [text]);
-  /** 行高（像素）：与 CSS 变量 --json-line-height 保持一致 */
   const fontSize = useSettingsStore((s) => s.settings.fontSize);
-  const lineHeightPx = Math.round(fontSize * 1.6);
+  const indent = useSettingsStore((s) => s.settings.indent);
+  /** 行高（像素）：与 CSS 变量 --json-line-height 保持一致 */
+  const lineHeightPx = Math.max(1, Math.round(fontSize * 1.6));
+
+  // 窗口化高亮：只为可见区域生成 token
+  const highlighter = useMemo(() => new WindowHighlighter(text, lang), [text, lang]);
+  const lineCount = highlighter.lineCount;
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const preRef = useRef<HTMLPreElement>(null);
+  /** 高亮内容层（跟随双向滚动） */
+  const contentRef = useRef<HTMLDivElement>(null);
+  /** 行号层（仅跟随纵向滚动） */
   const gutterRef = useRef<HTMLDivElement>(null);
+
   /** 光标所在行（1 起） */
   const [cursorLine, setCursorLine] = useState(1);
+  /**
+   * 实际滚动位置。
+   *
+   * 用 ref 而非 state 记录：滚动事件里先同步写入 ref（命令式更新 transform），
+   * 再触发一次渲染；渲染时读取 ref 得到的永远是**最新**滚动位置，
+   * 不会出现「状态落后一帧 → 渲染的行区间覆盖不到可见区域 → 露出空白」。
+   */
+  const scrollRef = useRef({ top: 0, height: 400 });
+  /** 滚动计数：仅用于触发重新渲染 */
+  const [, forceRender] = useReducer((x: number) => x + 1, 0);
 
-  // 同步行号/高亮层滚动
-  const syncScroll = () => {
+  // 视口尺寸变化时重新测量
+  useEffect(() => {
     const ta = textareaRef.current;
     if (!ta) return;
-    if (preRef.current) {
-      preRef.current.scrollTop = ta.scrollTop;
-      preRef.current.scrollLeft = ta.scrollLeft;
-    }
-    if (gutterRef.current) gutterRef.current.scrollTop = ta.scrollTop;
-  };
+    const measure = () => {
+      const h = ta.clientHeight;
+      if (scrollRef.current.height !== h) {
+        scrollRef.current = { ...scrollRef.current, height: h };
+        forceRender();
+      }
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(ta);
+    return () => ro.disconnect();
+  }, []);
 
-  useEffect(syncScroll, [text]);
+  /**
+   * 同步滚动：内容层用 transform 跟随（命令式，无渲染延迟），
+   * 行号层只跟随纵向。
+   */
+  const syncScroll = useCallback(() => {
+    const ta = textareaRef.current;
+    if (!ta) return;
+    const { scrollTop, scrollLeft, clientHeight } = ta;
+    if (contentRef.current) {
+      contentRef.current.style.transform = `translate(${-scrollLeft}px, ${-scrollTop}px)`;
+    }
+    if (gutterRef.current) {
+      gutterRef.current.style.transform = `translateY(${-scrollTop}px)`;
+    }
+    scrollRef.current = { top: scrollTop, height: clientHeight };
+    forceRender();
+  }, []);
 
   // 空白文档自动聚焦，便于直接粘贴
   useEffect(() => {
     if (autoFocus && !readOnly) textareaRef.current?.focus();
   }, [autoFocus, readOnly]);
 
-  // 光标行高亮
-  const updateCursorLine = () => {
+  // 内容变化后重新同步滚动位置（切换标签时 textarea 的 scrollTop 可能被重置）
+  useEffect(() => {
+    syncScroll();
+  }, [text, syncScroll]);
+
+  // 光标行高亮（用行索引二分查找，避免每次移动光标都扫描全文）
+  const updateCursorLine = useCallback(() => {
     const ta = textareaRef.current;
     if (!ta) return;
-    const upto = ta.value.slice(0, ta.selectionStart);
-    const line = upto.split("\n").length;
-    setCursorLine(line);
-  };
+    setCursorLine(highlighter.lineOf(ta.selectionStart) + 1);
+  }, [highlighter]);
 
   // 查找跳转：选中并滚动到目标位置
   useEffect(() => {
@@ -75,10 +124,8 @@ export const SourceEditor: React.FC<{
     try {
       ta.focus({ preventScroll: true });
       ta.setSelectionRange(reveal.start, reveal.end);
-      const lineHeight =
-        parseFloat(getComputedStyle(ta).lineHeight || "20") || 20;
-      const lineIndex = text.slice(0, reveal.start).split("\n").length - 1;
-      const top = Math.max(0, lineIndex * lineHeight - ta.clientHeight / 3);
+      const lineIndex = highlighter.lineOf(reveal.start);
+      const top = Math.max(0, lineIndex * lineHeightPx - ta.clientHeight / 3);
       ta.scrollTop = top;
       syncScroll();
       updateCursorLine();
@@ -88,69 +135,99 @@ export const SourceEditor: React.FC<{
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reveal?.nonce]);
 
-  // Tab 键插入缩进空格（编辑器体验对齐 Notepad++）
+  // Tab 键插入缩进（按用户设置的缩进宽度）
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key !== "Tab" || readOnly || !onChange) return;
     e.preventDefault();
     const ta = e.currentTarget;
     const start = ta.selectionStart;
     const end = ta.selectionEnd;
-    const next = `${text.slice(0, start)}  ${text.slice(end)}`;
+    const unit = indent === "tab" ? "\t" : " ".repeat(Number(indent) || 2);
+    const next = `${text.slice(0, start)}${unit}${text.slice(end)}`;
     onChange(next);
     requestAnimationFrame(() => {
-      ta.setSelectionRange(start + 2, start + 2);
+      ta.setSelectionRange(start + unit.length, start + unit.length);
     });
   };
+
+  // 可见行范围（含视口外缓冲）
+  const scrollTop = scrollRef.current.top;
+  const viewportH = scrollRef.current.height;
+  const [firstLine, lastLine] = visibleLineRange(
+    scrollTop,
+    viewportH,
+    lineHeightPx,
+    lineCount,
+    OVERSCAN
+  );
+  const visibleLines = useMemo(
+    () => highlighter.getLines(firstLine, lastLine),
+    [highlighter, firstLine, lastLine]
+  );
 
   return (
     <div
       className="relative h-full overflow-hidden font-mono"
       style={{ fontSize: "var(--json-font-size)", lineHeight: "var(--json-line-height)" }}
     >
-      {/* 行号 */}
-      <div
-        ref={gutterRef}
-        className="absolute left-0 top-0 bottom-0 w-12 overflow-hidden bg-smoke-bg-subtle border-r border-stroke select-none z-20"
-      >
-        {lines.map((_, i) => (
-          <div
-            key={i}
-            className={`px-2 text-right transition-colors duration-100 ${
-              errorLines?.has(i + 1)
-                ? "text-danger font-bold"
-                : i + 1 === cursorLine
-                  ? "text-accent-text font-medium"
-                  : "text-ink-tertiary"
-            }`}
-            style={{ height: "var(--json-line-height)" }}
-          >
-            {i + 1}
-          </div>
-        ))}
+      {/* 行号层 */}
+      <div className="absolute left-0 top-0 bottom-0 w-12 overflow-hidden bg-smoke-bg-subtle border-r border-stroke select-none z-20">
+        <div ref={gutterRef} className="absolute top-0 left-0 right-0">
+          {visibleLines.map((_, i) => {
+            const lineNo = firstLine + i + 1;
+            return (
+              <div
+                key={lineNo}
+                className={`absolute left-0 right-0 px-2 text-right transition-colors duration-100 ${
+                  errorLines?.has(lineNo)
+                    ? "text-danger font-bold"
+                    : lineNo === cursorLine
+                      ? "text-accent-text font-medium"
+                      : "text-ink-tertiary"
+                }`}
+                style={{ top: (lineNo - 1) * lineHeightPx, height: lineHeightPx }}
+              >
+                {lineNo}
+              </div>
+            );
+          })}
+        </div>
       </div>
 
-      {/* 当前行高亮 */}
+      {/* 当前行高亮（跟随纵向滚动，不随横向滚动） */}
       <div
         aria-hidden
         className="absolute left-12 right-0 pointer-events-none bg-accent/[0.06] z-[5]"
         style={{
-          top: (cursorLine - 1) * lineHeightPx,
+          top: (cursorLine - 1) * lineHeightPx - scrollTop,
           height: lineHeightPx,
         }}
       />
 
-      {/* 高亮层 */}
-      <pre
-        ref={preRef}
+      {/* 高亮层（跟随双向滚动） */}
+      <div
         aria-hidden
-        className="absolute left-12 top-0 right-0 bottom-0 overflow-hidden pointer-events-none whitespace-pre px-3 py-0"
+        className="absolute left-12 top-0 right-0 bottom-0 overflow-hidden pointer-events-none"
       >
-        {tokens.map((t, i) => (
-          <span key={i} className={t.cls}>
-            {t.text}
-          </span>
-        ))}
-      </pre>
+        <div ref={contentRef} className="absolute top-0 left-0 right-0">
+          {visibleLines.map((tokens, i) => {
+            const lineNo = firstLine + i + 1;
+            return (
+              <div
+                key={lineNo}
+                className="absolute left-0 pl-3 whitespace-pre"
+                style={{ top: (lineNo - 1) * lineHeightPx, height: lineHeightPx }}
+              >
+                {tokens.map((t, j) => (
+                  <span key={j} className={t.cls}>
+                    {t.text}
+                  </span>
+                ))}
+              </div>
+            );
+          })}
+        </div>
+      </div>
 
       {/* 透明文本编辑层 */}
       <textarea

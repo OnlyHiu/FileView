@@ -8,10 +8,48 @@ export interface Token {
   text: string;
 }
 
+/**
+ * 跨行状态（carry）：让分词器可以从任意位置继续，
+ * 而不必从文件开头重新扫描。
+ *
+ * 大文件只对**可见区域**分词，因此每个分词块都可能从某个块的中间开始；
+ * 块注释、模板字符串、跨行标签、未闭合的代码围栏都需要把状态带到下一块。
+ */
+export interface Carry {
+  /** 标记语言：处于标签内部（`<...` 未闭合） */
+  inTag: boolean;
+  /** 标记语言：处于注释内部（`<!--` 未闭合） */
+  inComment: boolean;
+  /** 代码：处于块注释内部 */
+  inBlockComment: boolean;
+  /** 代码：处于跨行字符串内部（记录引号字符，如反引号模板串） */
+  quote: string | null;
+  /** Markdown：处于代码围栏内部 */
+  inFence: boolean;
+}
+
+export const EMPTY_CARRY: Carry = {
+  inTag: false,
+  inComment: false,
+  inBlockComment: false,
+  quote: null,
+  inFence: false,
+};
+
+/** 分词结果 + 结束时的跨行状态 */
+export interface TokenizeResult {
+  tokens: Token[];
+  carry: Carry;
+}
+
 // ============ JSON ============
 
 const KEY_RE = /^"(?:[^"\\]|\\.)*"(?=\s*:)/;
-const STRING_RE = /^"(?:[^"\\]|\\.)*"/;
+/**
+ * 字符串正则排除换行：合法 JSON 的字符串不能跨行，
+ * 这样分词结果不会跨行，便于大文件按行分块渲染。
+ */
+const STRING_RE = /^"(?:[^"\\\n]|\\.)*"/;
 const NUMBER_RE = /^-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/;
 const WORD_RE = /^(?:true|false|null)\b/;
 
@@ -90,10 +128,11 @@ export function tokenizeJson(src: string): Token[] {
 // ============ Markdown ============
 
 /** Markdown：行级（标题/围栏代码/引用/列表）+ 行内（行内代码/粗体/斜体/链接） */
-export function tokenizeMarkdown(src: string): Token[] {
+export function tokenizeMarkdown(src: string, carry: Carry = EMPTY_CARRY): TokenizeResult {
   const tokens: Token[] = [];
   const lines = src.split("\n");
-  let inFence = false;
+  // 围栏状态从上一块继承：本块可能从围栏内部开始
+  let inFence = carry.inFence;
   const inline = /(`[^`]*`)|(\*\*[^*]+\*\*)|(\*[^*\n]+\*)|(\[[^\]]*\]\([^)]*\))/;
   lines.forEach((line, idx) => {
     const nl = idx < lines.length - 1 ? "\n" : "";
@@ -139,7 +178,7 @@ export function tokenizeMarkdown(src: string): Token[] {
     }
     tokens.push({ cls: "", text: rest + nl });
   });
-  return tokens;
+  return { tokens, carry: { ...carry, inFence } };
 }
 
 // ============ INI / properties ============
@@ -394,8 +433,17 @@ export function detectCsvDelimiter(text: string): string {
 
 // ============ XML / HTML ============
 
-/** XML / HTML：标签、属性、字符串、注释 */
-export function tokenizeMarkup(src: string, isHtml: boolean): Token[] {
+/**
+ * XML / HTML：标签、属性、字符串、注释
+ *
+ * 支持跨行状态：标签与注释都可能跨越分词块边界，
+ * 未闭合时把状态记入 carry，交给下一块继续。
+ */
+export function tokenizeMarkup(
+  src: string,
+  isHtml: boolean,
+  carry: Carry = EMPTY_CARRY
+): TokenizeResult {
   const tokens: Token[] = [];
   let i = 0;
   const n = src.length;
@@ -406,6 +454,26 @@ export function tokenizeMarkup(src: string, isHtml: boolean): Token[] {
       pending = "";
     }
   };
+
+  // 承接上一块的状态：先把未闭合的注释 / 标签补完
+  if (carry.inComment) {
+    const end = src.indexOf("-->");
+    if (end === -1) {
+      tokens.push({ cls: "syn-comment", text: src });
+      return { tokens, carry: { ...carry, inComment: true } };
+    }
+    tokens.push({ cls: "syn-comment", text: src.slice(0, end + 3) });
+    i = end + 3;
+  } else if (carry.inTag) {
+    const end = src.indexOf(">");
+    if (end === -1) {
+      tokens.push(...splitTag(src, isHtml));
+      return { tokens, carry: { ...carry, inTag: true } };
+    }
+    tokens.push(...splitTag(src.slice(0, end + 1), isHtml));
+    i = end + 1;
+  }
+
   while (i < n) {
     const ch = src[i];
     if (ch !== "<") {
@@ -417,17 +485,22 @@ export function tokenizeMarkup(src: string, isHtml: boolean): Token[] {
     if (src.startsWith("<!--", i)) {
       flush();
       const end = src.indexOf("-->", i);
-      const j = end === -1 ? n : end + 3;
-      tokens.push({ cls: "syn-comment", text: src.slice(i, j) });
-      i = j;
+      if (end === -1) {
+        // 注释跨越块边界
+        tokens.push({ cls: "syn-comment", text: src.slice(i) });
+        return { tokens, carry: { ...carry, inComment: true, inTag: false } };
+      }
+      tokens.push({ cls: "syn-comment", text: src.slice(i, end + 3) });
+      i = end + 3;
       continue;
     }
     // 标签
     const tagEnd = src.indexOf(">", i);
     if (tagEnd === -1) {
-      pending += ch;
-      i += 1;
-      continue;
+      // 标签跨越块边界
+      flush();
+      tokens.push(...splitTag(src.slice(i), isHtml));
+      return { tokens, carry: { ...carry, inTag: true, inComment: false } };
     }
     flush();
     const raw = src.slice(i, tagEnd + 1);
@@ -435,7 +508,7 @@ export function tokenizeMarkup(src: string, isHtml: boolean): Token[] {
     i = tagEnd + 1;
   }
   flush();
-  return tokens;
+  return { tokens, carry: { ...carry, inTag: false, inComment: false } };
 }
 
 function splitTag(raw: string, isHtml: boolean): Token[] {
@@ -810,8 +883,41 @@ const CODE_SPECS: Record<CodeLang, CodeSpec> = {
 const IDENT_START = /[A-Za-z_$]/;
 const IDENT_CHAR = /[A-Za-z0-9_$]/;
 
-/** C 家族通用高亮 */
-export function tokenizeCode(src: string, lang: CodeLang): Token[] {
+/**
+ * 扫描字符串的结束位置。
+ *
+ * @param start 起始下标；传 -1 表示从窗口开头续接上一块的未闭合字符串
+ * @returns [结束下标, 是否闭合]
+ *
+ * 普通引号（' "）遇到换行即终止（与多数语言一致）；
+ * 反引号模板串允许跨行，未闭合时由调用方记入 carry。
+ */
+function scanString(src: string, start: number, quote: string): [number, boolean] {
+  const n = src.length;
+  let j = start + 1;
+  while (j < n) {
+    if (src[j] === "\\") {
+      j += 2;
+      continue;
+    }
+    if (src[j] === quote) return [j + 1, true];
+    if (src[j] === "\n" && quote !== "`") return [j, false];
+    j += 1;
+  }
+  return [n, false];
+}
+
+/**
+ * C 家族通用高亮
+ *
+ * 支持跨行状态：块注释与模板字符串（反引号）可能跨越分词块边界，
+ * 未闭合时把状态记入 carry，交给下一块继续。
+ */
+export function tokenizeCode(
+  src: string,
+  lang: CodeLang,
+  carry: Carry = EMPTY_CARRY
+): TokenizeResult {
   const spec = CODE_SPECS[lang] ?? CODE_SPECS.plain;
   const tokens: Token[] = [];
   let i = 0;
@@ -825,6 +931,26 @@ export function tokenizeCode(src: string, lang: CodeLang): Token[] {
   };
   const kw = spec.caseInsensitive ? lowerSet(spec.keywords) : spec.keywords;
   const cst = spec.caseInsensitive ? lowerSet(spec.constants) : spec.constants;
+
+  // 承接上一块的状态：先把未闭合的块注释 / 模板串补完
+  if (carry.inBlockComment && spec.blockComment) {
+    const endMark = spec.blockComment[1];
+    const end = src.indexOf(endMark);
+    if (end === -1) {
+      tokens.push({ cls: "syn-comment", text: src });
+      return { tokens, carry: { ...carry, inBlockComment: true } };
+    }
+    tokens.push({ cls: "syn-comment", text: src.slice(0, end + endMark.length) });
+    i = end + endMark.length;
+  } else if (carry.quote) {
+    const [end, closed] = scanString(src, -1, carry.quote);
+    if (!closed) {
+      tokens.push({ cls: "syn-string", text: src });
+      return { tokens, carry: { ...carry, quote: carry.quote } };
+    }
+    tokens.push({ cls: "syn-string", text: src.slice(0, end) });
+    i = end;
+  }
 
   while (i < n) {
     const ch = src[i];
@@ -844,7 +970,12 @@ export function tokenizeCode(src: string, lang: CodeLang): Token[] {
       flush();
       const endMark = spec.blockComment[1];
       const end = src.indexOf(endMark, i + spec.blockComment[0].length);
-      const j = end === -1 ? n : end + endMark.length;
+      if (end === -1) {
+        // 块注释跨越块边界
+        tokens.push({ cls: "syn-comment", text: src.slice(i) });
+        return { tokens, carry: { ...carry, inBlockComment: true, quote: null } };
+      }
+      const j = end + endMark.length;
       tokens.push({ cls: "syn-comment", text: src.slice(i, j) });
       i = j;
       continue;
@@ -852,21 +983,13 @@ export function tokenizeCode(src: string, lang: CodeLang): Token[] {
     // 字符串
     if (spec.quotes.includes(ch)) {
       flush();
-      let j = i + 1;
-      while (j < n) {
-        if (src[j] === "\\") {
-          j += 2;
-          continue;
-        }
-        if (src[j] === ch) {
-          j += 1;
-          break;
-        }
-        if (src[j] === "\n" && ch !== "`") break;
-        j += 1;
+      const [end, closed] = scanString(src, i, ch);
+      tokens.push({ cls: "syn-string", text: src.slice(i, end) });
+      i = end;
+      if (!closed && ch === "`") {
+        // 模板字符串跨越块边界
+        return { tokens, carry: { ...carry, quote: ch } };
       }
-      tokens.push({ cls: "syn-string", text: src.slice(i, Math.min(j, n)) });
-      i = Math.min(j, n);
       continue;
     }
     // 数字
@@ -912,7 +1035,7 @@ export function tokenizeCode(src: string, lang: CodeLang): Token[] {
     i += 1;
   }
   flush();
-  return tokens;
+  return { tokens, carry: { ...carry, inBlockComment: false, quote: null } };
 }
 
 function lowerSet(set: Set<string>): Set<string> {
@@ -921,29 +1044,112 @@ function lowerSet(set: Set<string>): Set<string> {
 
 // ============ 统一入口 ============
 
-export function tokenize(src: string, lang: Lang): Token[] {
+/**
+ * 该文本中是否可能出现**跨行构造**（块注释 / 模板串 / 跨行标签 / 代码围栏）。
+ *
+ * 用途：大文件按块分词时，块的起始状态（carry）依赖前一块的结果，
+ * 于是「跳到远处」需要顺序处理途经的所有块。
+ * 若全文根本不存在跨行构造，则每块的起始状态必然都是初始状态，
+ * 可以直接跳到目标块——这覆盖了绝大多数文件。
+ *
+ * 判定必须**保守**：宁可误判为「可能跨行」（退化为顺序追赶，只是慢一点），
+ * 也不能误判为「不会跨行」（会导致高亮错误）。
+ */
+export function mayCarryAcrossLines(src: string, lang: Lang): boolean {
   switch (lang) {
     case "json":
-      return tokenizeJson(src);
-    case "markdown":
-      return tokenizeMarkdown(src);
     case "ini":
-      return tokenizeIni(src);
     case "yaml":
-      return tokenizeYaml(src);
     case "toml":
-      return tokenizeToml(src);
     case "csv":
-      return tokenizeCsv(src);
-    case "xml":
-      return tokenizeMarkup(src, false);
-    case "html":
-      return tokenizeMarkup(src, true);
     case "log":
-      return tokenizeLog(src);
     case "text":
-      return [{ cls: "", text: src }];
-    default:
-      return tokenizeCode(src, lang);
+      // 这些语言的分词不跨行
+      return false;
+    case "markdown":
+      // 代码围栏 ``` 或 ~~~ 可能跨行
+      return src.includes("```") || src.includes("~~~");
+    case "xml":
+    case "html": {
+      if (src.includes("<!--")) return true; // 注释可能跨行
+      // 标签跨行：存在 "<" 之后在同一行内没有 ">" 就换行
+      return /<[^>\n]*\n/.test(src);
+    }
+    default: {
+      const spec = CODE_SPECS[lang as CodeLang];
+      if (!spec) return false;
+      if (spec.blockComment && src.includes(spec.blockComment[0])) return true;
+      // 反引号模板串可能跨行
+      if (spec.quotes.includes("`") && src.includes("`")) return true;
+      return false;
+    }
   }
+}
+
+/** 全量分词（不分块），返回 token 列表 */
+export function tokenize(src: string, lang: Lang): Token[] {
+  return tokenizeWithCarry(src, lang, EMPTY_CARRY).tokens;
+}
+
+/**
+ * 带跨行状态的分词：可从任意位置继续，
+ * 返回 token 与结束时的状态（供下一块接着用）。
+ */
+export function tokenizeWithCarry(
+  src: string,
+  lang: Lang,
+  carry: Carry
+): TokenizeResult {
+  switch (lang) {
+    case "json":
+      // JSON 的字符串不能跨行（正则已排除 \n），无需跨行状态
+      return { tokens: tokenizeJson(src), carry: EMPTY_CARRY };
+    case "markdown":
+      return tokenizeMarkdown(src, carry);
+    case "ini":
+      return { tokens: tokenizeIni(src), carry: EMPTY_CARRY };
+    case "yaml":
+      return { tokens: tokenizeYaml(src), carry: EMPTY_CARRY };
+    case "toml":
+      return { tokens: tokenizeToml(src), carry: EMPTY_CARRY };
+    case "csv":
+      return { tokens: tokenizeCsv(src), carry: EMPTY_CARRY };
+    case "xml":
+      return tokenizeMarkup(src, false, carry);
+    case "html":
+      return tokenizeMarkup(src, true, carry);
+    case "log":
+      return { tokens: tokenizeLog(src), carry: EMPTY_CARRY };
+    case "text":
+      return { tokens: [{ cls: "", text: src }], carry: EMPTY_CARRY };
+    default:
+      return tokenizeCode(src, lang, carry);
+  }
+}
+
+/**
+ * 把 token 流按行拆分：token 内的换行符被丢弃，
+ * 每行单独一组 token（便于按行渲染）。
+ *
+ * 拼接所有行的 token 文本（不含换行）应与源文本去掉换行后一致。
+ */
+export function splitTokensByLine(tokens: Token[]): Token[][] {
+  const lines: Token[][] = [];
+  let cur: Token[] = [];
+  for (const t of tokens) {
+    if (!t.text.includes("\n")) {
+      cur.push(t);
+      continue;
+    }
+    const parts = t.text.split("\n");
+    for (let i = 0; i < parts.length; i++) {
+      if (i > 0) {
+        lines.push(cur);
+        cur = [];
+      }
+      if (parts[i]) cur.push({ cls: t.cls, text: parts[i] });
+    }
+  }
+  lines.push(cur);
+  return lines;
 }

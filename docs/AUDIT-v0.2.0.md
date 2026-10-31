@@ -15,10 +15,11 @@
 
 | 层次 | 手段 | 结果 |
 |---|---|---|
-| Rust 后端 | `cargo test`（50 项） | 全部通过 |
-| 前端纯逻辑 | Node 内置 test runner（23 项） | 全部通过 |
+| Rust 后端 | `cargo test`（49 项） | 全部通过 |
+| 前端纯逻辑 | Node 内置 test runner（46 项） | 全部通过 |
 | 类型检查 | `tsc --noEmit` | 无错误 |
 | 构建 | `npm run build` | 通过 |
+| 性能基准 | `scripts/bench-highlight.mjs` | 见 §3.1 |
 
 ---
 
@@ -29,7 +30,8 @@
 | 架构与信息架构 | **合理**。标题栏 / 菜单栏 / 工具栏 / 标签栏 / 文档区 + 侧栏面板 / 状态栏的骨架清晰，v0.2.0 的「文档区唯一」改造是正确方向 |
 | 状态管理 | **基本合理，存在跨文档状态污染**。已修复 |
 | 解析正确性 | **存在实质缺陷**。多字节文本下错误定位漂移、JSONL 坏行诊断丢失，已修复 |
-| 安全性 | **存在严重缺陷**。Markdown 预览存在可执行脚本注入，已修复 |
+| 安全性 | **存在严重缺陷**。Markdown 预览存在可执行脚本注入；且完全没有 CSP。均已修复 |
+| 大文件性能 | **存在严重缺陷**。文档区未虚拟滚动，64MB 文件打开即卡死。已修复（§3.1） |
 | 系统集成 | **设计克制（HKCU / 不伪造 UserChoice）是优点**，但存在越界删除与首启劫持，已修复 |
 | 文档一致性 | **多处声明与实现不符**。已修正 |
 | 测试 | **后端有 49 项测试但会破坏用户注册表**。已加沙箱隔离 |
@@ -275,18 +277,119 @@
 
 ---
 
-## 3. 已知遗留问题（本次未修改，建议排期）
+## 3. 遗留问题的处置（2026-10-29 追加）
+
+审核后追加处理了最初列为遗留的两项（R1 / R2），另有几项仍建议排期。
+
+### 3.1 R1 文档区未虚拟滚动 —— 已修复
+
+**原问题**：`SourceEditor` 为**每一行**生成一个行号 DOM 节点，并对**全文**分词。
+64MB 文件（约 90 万行）意味着 90 万个 DOM 节点 + 数百万个 token，
+打开即卡死，每次按键还要重新分词并重绘全文。
+
+**修复方案**：窗口化渲染 + 窗口化分词。
+
+1. **行索引**：一次扫描记录每行起始偏移（只存数字），并支持 `偏移 → 行号` 的二分查找。
+2. **窗口化分词**（`src/lib/highlightWindow.ts`）：
+   - 文件按 256 行切块，**只为可见区域**生成 token，块结果进 LRU 缓存；
+   - 块之间用「跨行状态」（carry）续接：块注释、模板字符串、跨行标签、
+     未闭合的代码围栏都不会在块边界处丢失上下文。
+3. **跨行状态的可续接性**：`tokenizeMarkup` / `tokenizeCode` / `tokenizeMarkdown`
+   增加了 carry 进出参数；JSON 的字符串不允许跨行，正则已排除 `\n`，天然行安全。
+4. **快速跳转**：若全文不存在跨行构造（绝大多数文件），每块起点状态必然相同，
+   可直接跳到任意块，无需顺序处理途经的块——这是把「拖动滚动条到文件中部」
+   从 109ms 降到 0.7ms 的关键。
+5. **渲染**：行号与高亮层只渲染可见行（视口外多渲染 20 行缓冲），
+   通过 `transform` 命令式跟随滚动（无渲染延迟、无元素高度上限）。
+6. **顺带修掉**：原实现中「当前行高亮」不随滚动移动（它不在被滚动的容器内），
+   现已修正。
+
+**同时消除的 O(n) 逐键开销**：
+
+| 位置 | 原开销 | 现在 |
+|---|---|---|
+| 状态栏行数统计 | 每次按键扫描全文 | 大文件改为防抖计算 |
+| 查找命中计算 | 每次按键扫描全文 | 大文件改为防抖计算 |
+| 光标行号定位 | 每次移动光标切分全文 | 行索引二分查找 |
+| 查找跳转定位行号 | 每次跳转切分全文 | 行索引二分查找 |
+
+**实测**（20 万行 / 14.7MB JSON）：
+
+| 指标 | 修复前 | 修复后 |
+|---|---|---|
+| 首屏可用 | 225 ms 分词 + 160 万 token + 20 万 DOM 节点 | 13 ms |
+| 跳转到文件中部 | —（打开即已卡死） | 0.7 ms |
+| 渲染 DOM 节点 | 与行数同阶 | 与视口同阶（常数级） |
+
+**验证**：新增 21 项测试（`src/lib/highlightWindow.test.ts`），
+核心不变式是「**窗口分词结果必须与整文件分词结果完全一致**」，
+覆盖 Markdown 围栏、XML 跨行标签、HTML 跨行注释、JS 块注释与模板串等
+跨块场景；另有端到端测试校验「滚动到任意位置，渲染内容与源文对应行一致」。
+
+**打包验证**：打包后的 FileView 实测——窗口化编辑器的行号、语法高亮、
+当前行高亮、错误行标注均正常渲染，状态栏行数统计正确。
+
+### 3.2 R2 `csp: null` —— 已修复
+
+**原问题**：Tauri 不内置默认 CSP，`csp: null` 意味着**完全没有** CSP 头。
+任一 XSS 都会被放大：webview 内存在 IPC 桥，脚本可直接调用
+`read_file_text` / `write_file_text` 读写任意文件。
+
+**修复**：配置了一条最小化 CSP（`src-tauri/tauri.conf.json`）：
+
+```
+default-src 'self';
+script-src 'self';
+style-src 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline';
+img-src 'self' data: https: http:;
+font-src 'self' data:;
+connect-src 'self' ipc: http://ipc.localhost;
+frame-src 'self' data: blob:;
+object-src 'none'; base-uri 'none'; form-action 'none'
+```
+
+各条依据（对照 Tauri 2.11.6 源码逐条核实）：
+
+| 指令 | 取值 | 依据 |
+|---|---|---|
+| `connect-src` | 含 `http://ipc.localhost` | Windows 上 WebView2 不支持自定义协议，IPC 实际走 `http://ipc.localhost/<cmd>`（`wry` 的 `custom_protocol_workaround`）；缺失会退化到 postMessage 通道 |
+| `script-src` | 仅 `'self'` | Tauri 的 IPC 桥通过 WebView2 的 `AddScriptToExecuteOnDocumentCreated` 注入，**不受页面 CSP 约束**；Vite 产物是外部 JS，无需 `unsafe-inline` |
+| `style-src` | 含 `'unsafe-inline'` | React 的 `style={{...}}` 属于 style 属性；HTML 预览的 `<style>` 块也需要它 |
+| `style-src-attr` | 单独声明 `'unsafe-inline'` | 若 Tauri 未来给 `style-src` 追加 nonce，Chrome 会忽略同指令里的 `'unsafe-inline'`；单独声明可保底 |
+| `asset:` | **未加入** | 本应用未启用 `protocol-asset` 特性，不存在该协议 |
+| `object-src` / `base-uri` / `form-action` | `'none'` | 阻断插件、`<base>` 劫持与表单提交劫持 |
+
+**注意事项**：
+
+1. **开发模式不生效**：Windows 下 `tauri dev` 直接从 `http://localhost:5173` 加载页面，
+   CSP 响应头只在生产构建（`tauri://` 协议）时附加。CSP 的实际效果需要在打包版验证。
+2. `index.html` 中**不能新增内联 `<script>` 或 `<style>`**：
+   Tauri 会为其追加 nonce/hash，一旦追加，同指令的 `'unsafe-inline'` 会被 Chrome 忽略，
+   导致内联样式失效。
+3. 已核对编译产物，确认 CSP 字符串确实被嵌入二进制（`scripts/check-csp.mjs`）。
+
+**实测验证**（在真实 Chromium 引擎 Edge 上，以及打包后的 FileView 上）：
+
+| 验证项 | 方法 | 结果 |
+|---|---|---|
+| CSP 语义正确性 | 用同一条 CSP 构造探针页，在 Edge headless 中运行 | 同源 JS/CSS 正常；内联 `style` 属性与 `<style>` 块正常；**内联脚本被阻止**（符合预期）；`srcdoc` iframe 正常渲染 |
+| 打包后应用可正常启动 | `tauri build` 产物直接运行并截图 | 标题栏 / 菜单栏 / 工具栏 / 标签栏 / 状态栏全部正常渲染，无白屏 |
+| **IPC 通道未被拦截** | 以命令行参数启动打包版并传入一个 JSON 文件 | 文件被打开、读取、解析，状态栏显示「● JSON 合法 · 12 节点 · 深度 4」，语法高亮正常 → `take_startup_file` / `read_file_text` / `parse_json` 三条通道均正常 |
+
+> 补充：即使 `connect-src` 配错，Tauri 也会自动回退到 `postMessage` 通道（功能正常但有告警）。
+> 上述验证确认的是**配置正确**而非「恰好能跑」。
+
+### 3.3 仍建议排期
 
 | # | 问题 | 影响 | 建议 |
 |---|---|---|---|
-| R1 | 文档区未做虚拟滚动 | 64MB 文件会渲染数十万 DOM 节点，打开与每次按键都明显卡顿 | 引入虚拟列表；或对超大文件只读化 |
-| R2 | `tauri.conf.json` 中 `csp: null` | 失去 CSP 兜底，任一 XSS 都会被放大 | 配置最小 CSP（`default-src 'self'`），配合本次的 HTML 白名单双保险 |
-| R3 | `read_file_text` / `write_file_text` 接受任意路径 | webview 一旦被攻破即可读写任意文件 | 增加路径白名单或最近文件限制 |
 | R4 | 启动时 JSON 解析深度依赖 serde_json 默认的 128 层限制 | 超过 128 层的合法 JSON 报「recursion limit exceeded」，错误信息误导 | 显式深度限制并给出专门诊断文案 |
 | R5 | `QueryPanel` 命中列表用 `Array.find` 线性查找节点 | 命中数 × 节点数的复杂度，大文档下渲染卡顿 | 预建 `Map<path, node>` / `Map<id, node>` |
 | R6 | JSONL 格式化把 CRLF 统一为 LF，且丢弃空行 | 会改变文件的行尾风格与行号 | 保留原始行尾风格 |
 | R7 | 工具面板宽度未持久化 | 重启后恢复默认宽度 | 存入 settings |
-| R8 | `supported_extensions` 命令已移除 | 前端扩展名清单与 Rust 端各维护一份，存在漂移风险 | 已提供 `scripts/check-ext-sync.mjs` 做一致性校验，建议纳入 CI |
+| R8 | 前后端扩展名清单各维护一份 | 存在漂移风险 | 已提供 `scripts/check-ext-sync.mjs` 做一致性校验，建议纳入 CI |
+| R9 | `read_file_text` / `write_file_text` 接受任意路径 | webview 一旦被攻破即可读写任意文件 | 增加路径白名单或最近文件限制（CSP 只能缓解、不能消除该风险） |
+| R10 | 超大文件仍会逐键重建行索引 | 64MB 文件每次按键约数十毫秒 | 行索引增量更新（按编辑位置平移） |
 
 ---
 
@@ -294,9 +397,11 @@
 
 ```
 cargo test              # 49 项后端测试
-npm test                # 23 项前端纯逻辑测试
+npm test                # 46 项前端纯逻辑测试
 npm run build           # tsc + vite 构建
 node scripts/check-ext-sync.mjs   # 前后端扩展名清单一致性
+node scripts/check-csp.mjs        # 确认 CSP 已嵌入编译产物
+node scripts/bench-highlight.mjs  # 大文件分词性能基准
 ```
 
 新增测试文件：
@@ -305,7 +410,8 @@ node scripts/check-ext-sync.mjs   # 前后端扩展名清单一致性
 |---|---|
 | `src-tauri/src/json_core/parser_regression.rs` | 诊断偏移准确性、JSONC 字节对齐、JSONL 坏行保留 |
 | `src/lib/markdown.test.ts` | Markdown 注入向量（15 项） |
-| `src/lib/highlight.test.ts` | token 与源文本一致性、CSV 分隔符识别（8 项） |
+| `src/lib/highlight.test.ts` | token 与源文本一致性、CSV 分隔符识别、跨行构造检测（13 项） |
+| `src/lib/highlightWindow.test.ts` | 窗口化分词与整文件分词等价、可见行范围、端到端渲染一致性（18 项） |
 
 ---
 
@@ -317,11 +423,14 @@ node scripts/check-ext-sync.mjs   # 前后端扩展名清单一致性
 2. **不伪造 `UserChoice`**：正确尊重 Windows 的哈希保护机制，
    改为注册 ProgID + 引导用户在系统设置中确认。
 3. **注销时只移除自己的值**：不会删除用户已有的其他「打开方式」。
-4. **`csp: null` 之外未开启多余权限**：capabilities 中声明的每一项权限都已核实存在于生成的 ACL 清单。
+4. **capabilities 未开启多余权限**：声明的每一项权限都已核实存在于生成的 ACL 清单。
 5. **树形视图使用 `@tanstack/react-virtual`**：大 JSON 的树形渲染已虚拟化。
 6. **JSON 路径生成规则**（`root.users[0].name`、非法标识符键用 `['...']`）
    在前后端两侧保持一致，且有测试覆盖。
 7. **格式化保持键序**（仅 `sort_keys` 才重排）：有专门测试守护，不会在格式化时意外改变数据结构。
+8. **编辑器用「高亮层 + 透明 textarea」叠加**：比引入 CodeMirror 更轻，
+   配合窗口化渲染足以支撑超大文件；行号与高亮层分属两个滚动容器，
+   天然对齐。
 
 ---
 
@@ -338,21 +447,28 @@ node scripts/check-ext-sync.mjs   # 前后端扩展名清单一致性
 - `src-tauri/src/sys/mod.rs` — 旧品牌迁移的归属校验、批量清理
 - `src-tauri/src/settings.rs` — `serde(default)`、原子写、默认不注册文件关联
 - `src-tauri/src/main.rs` — 批量注册、移除死命令
+- `src-tauri/tauri.conf.json` — 配置最小化 CSP（§3.2）
 
 **前端**
 
 - `src/lib/markdown.ts` — 白名单净化、危险元素连内容移除、URL 协议校验
 - `src/lib/markdown.test.ts` — 新增安全测试
-- `src/lib/highlight.ts` — CSV 分隔符识别、CSV 高亮保真、Perl / R 高亮
+- `src/lib/highlight.ts` — CSV 分隔符识别、CSV 高亮保真、Perl / R 高亮、跨行状态（carry）支持
 - `src/lib/highlight.test.ts` — 新增一致性测试
+- `src/lib/highlightWindow.ts` — 新增：行索引、窗口化分词、可见行范围（§3.1）
+- `src/lib/highlightWindow.test.ts` — 新增：窗口化等价性与端到端渲染测试
 - `src/lib/types.ts` — 新增 `perl` / `r` 高亮语言
 - `src/lib/api.ts` — 默认不注册文件关联
-- `src/stores/jsonStore.ts` — 查找命中同步、跨标签状态清理、折叠按路径索引、重做栈失效
+- `src/stores/jsonStore.ts` — 查找命中同步、跨标签状态清理、折叠按路径索引、重做栈失效、查找防抖
+- `src/features/SourceEditor.tsx` — 改为虚拟滚动渲染（行号 + 高亮层）、按缩进设置插入 Tab
 - `src/features/TreeView.tsx` — 折叠按路径索引
 - `src/features/MarkdownPreview.tsx` — 链接协议限制
 - `src/components/ui.tsx` — 对话框无障碍与焦点管理、移除 `ProgressBar`
 - `src/components/SidePanel.tsx` — Esc 分层
-- `src/App.tsx` — 定位触发改由 store nonce 驱动
+- `src/App.tsx` — 定位触发改由 store nonce 驱动、行数统计防抖
+- `index.html` — 修正过时的标题「JSON Viewer」→「FileView」
 - `package.json` — 新增 `npm test`
 - `tsconfig.json` — 排除测试文件
 - `scripts/check-ext-sync.mjs` — 前后端扩展名清单一致性校验
+- `scripts/check-csp.mjs` — 确认 CSP 已嵌入编译产物
+- `scripts/bench-highlight.mjs` — 大文件分词性能基准
