@@ -153,6 +153,13 @@ node scripts/bench-highlight.mjs  # 大文件分词性能基准
   URL 属性只允许 `http(s)` / `mailto` 等安全协议。
 - HTML 预览在 `sandbox=""` 的 iframe 中渲染（无脚本、无表单、独立的 opaque origin）。
 
+## ⚡ 性能
+
+- **大文件虚拟滚动**：文档区只渲染可见行、只对可见区域做语法高亮，
+  数十 MB 的文件也能流畅打开与滚动（此前会为每一行生成 DOM 节点并对全文分词）。
+- **启动零 Shell 广播**：注册表写入操作全部幂等化，只有真正发生变更时才通知
+  资源管理器，避免每次启动都让桌面图标闪烁。
+
 ## 📜 许可证
 
 [MIT](LICENSE) © 2025 FileView Team
