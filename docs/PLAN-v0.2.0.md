@@ -111,7 +111,7 @@
 3. 工具栏不再出现格式化 / 压缩 / 键排序按钮，三者仅在「格式化」菜单中可用。
 4. `.md/.yaml/.toml/.csv/.xml/.html/.js/.py/.rs/.go/...` 等文件打开后有正确高亮，CSV 有表格视图，MD 有预览。
 5. `Ctrl+F` 查找栏可用并能跳转高亮；`Ctrl+Z` 可撤销。
-6. 版本号显示 0.2.0，安装包名 `FileView_0.2.0_x64-setup.exe`。
+6. 版本号显示 0.2.0，安装包名 `FileView_0.2.0_x64_zh-CN.msi`（MSI，WiX 官方工具链）。
 7. `npm run build` 与 `npm run tauri:build` 均通过，无 TS 报错。
 
 ---

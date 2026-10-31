@@ -54,7 +54,9 @@
 **关键决策**
 
 1. **Tauri 2 而非 Electron**：安装包 ~5MB、内存占用低、Rust 直接调 Windows API 做注册表/右键菜单注入，无需额外原生模块。
-2. **MSIX（sparse package）+ NSIS 双分发**：MSIX 获得 Windows 11 新版右键菜单（顶级菜单）与干净卸载；NSIS 版用注册表注入进「显示更多选项」经典菜单。
+2. **MSI（WiX 官方工具链）分发**：使用 Microsoft WiX Toolset 生成 Windows Installer 包，
+   逐用户安装（`InstallScope="perUser"`），无需管理员权限；
+   MSIX（sparse package）可获得 Windows 11 新版右键菜单（顶级菜单）与干净卸载（尚未落地）。
 3. **大文件策略**：Rust 侧流式/分块解析 + 前端虚拟滚动，JSON 文本永不整段进 DOM。
 
 ### 主要 crate / 依赖
@@ -239,7 +241,7 @@ open_default_apps_settings() -> ()   // ms-settings:defaultapps
 
 ## 8. 打包与分发
 
-1. **NSIS 安装器**（Tauri bundler）：安装/卸载时调用 `sys::install_all()` / `uninstall_all()`，写右键菜单与 ProgID。
+1. **MSI 安装器**（Tauri bundler + WiX Toolset）：安装到 `%LOCALAPPDATA%\Programs\FileView`（逐用户，无需管理员）。
 2. **MSIX 稀疏包**：签名（代码签名证书）后获得 Win11 顶级右键菜单 + 干净卸载 + 自动更新（或配 `tauri-plugin-updater`）。
 3. CI：GitHub Actions `windows-latest` 矩阵构建 + 签名 + 生成安装包；MSIX 走 `MakeAppx` + `SignTool`。
 

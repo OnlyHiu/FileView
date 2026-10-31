@@ -32,7 +32,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
+    "targets": ["msi"],
     "icon": ["icons/icon.ico"],
     "shortDescription": "Notepad++ 风格的多格式文件查看与编辑器",
     "longDescription": "A Windows 11 Fluent style Notepad++-like viewer and editor for JSON, Markdown, YAML, TOML, CSV, XML, HTML, code and text files with shell integration.",
@@ -41,8 +41,9 @@
     "copyright": "© 2025 FileView Team",
     "windows": {
       "webviewInstallMode": { "type": "downloadBootstrapper" },
-      "nsis": {
-        "installMode": "currentUser"
+      "wix": {
+        "language": ["zh-CN", "en-US"],
+        "template": "wix/main.wxs"
       }
     }
   }

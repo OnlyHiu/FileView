@@ -78,8 +78,14 @@
 
 | 文件 | 说明 |
 |---|---|
-| **FileView_0.2.0_x64-setup.exe** | NSIS 安装包（推荐，含卸载项，一键清理注册表集成）|
+| **FileView_0.2.0_x64_zh-CN.msi** | MSI 安装包（简体中文，推荐）|
+| **FileView_0.2.0_x64_en-US.msi** | MSI 安装包（英文）|
 | **fileview.exe** | 免安装单文件，双击即用 |
+
+> 安装包由 **Microsoft WiX Toolset** 官方工具链生成。
+> 逐用户安装（`InstallScope="perUser"`），**无需管理员权限**，
+> 默认安装到 `%LOCALAPPDATA%\Programs\FileView`，
+> 卸载入口在「设置 → 移除全部系统集成」与「应用和功能」中。
 
 > 安装后在「设置 → 默认打开方式」中勾选需要的扩展名即可注册文件关联。
 
@@ -107,7 +113,7 @@
 ```bash
 npm install
 npm run tauri:dev     # 开发模式
-npm run tauri:build   # 打包 exe + NSIS 安装器
+npm run tauri:build   # 打包 exe + MSI 安装包（WiX 官方工具链）
 npm test              # 前端纯逻辑测试（Node 内置 test runner）
 cd src-tauri && cargo test   # 后端测试（注册表相关测试运行在沙箱中，不影响系统）
 ```
