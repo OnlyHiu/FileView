@@ -36,11 +36,13 @@ pub fn collect_status() -> IntegrationStatus {
 /// 否则可能误删同名但属于其它软件的注册表项。
 pub fn migrate_legacy_brand() {
     use registry::{delete_key, open_key};
+    let mut changed = false;
     // 旧「默认应用」登记：仅当其指向 JsonViewer 的 Capabilities 才删除
-    if let Ok(ra) = open_key(r"Software\RegisteredApplications") {
+    if let Ok(ra) = registry::open_key_write(r"Software\RegisteredApplications") {
         if let Ok(v) = ra.get_value::<String, _>("JSON Viewer") {
             if v.to_lowercase().contains("jsonviewer") {
                 let _ = ra.delete_value("JSON Viewer");
+                changed = true;
             }
         }
     }
@@ -54,6 +56,7 @@ pub fn migrate_legacy_brand() {
             .unwrap_or(false);
         if ours {
             let _ = delete_key(legacy_caps);
+            changed = true;
         }
     }
     // 旧 ProgID 与扩展名对旧 ProgID 的引用
@@ -65,13 +68,14 @@ pub fn migrate_legacy_brand() {
             continue;
         }
         let _ = delete_key(&old_path);
-        if let Ok(ext_key) = open_key(format!(r"Software\Classes\.{}", ext)) {
+        changed = true;
+        if let Ok(ext_key) = registry::open_key_write(format!(r"Software\Classes\.{}", ext)) {
             if let Ok(v) = ext_key.get_value::<String, _>("") {
                 if v == old_pid {
                     let _ = ext_key.delete_value("");
                 }
             }
-            if let Ok(ow) = ext_key.open_subkey("OpenWithProgids") {
+            if let Ok(ow) = ext_key.open_subkey_with_flags("OpenWithProgids", winreg::enums::KEY_ALL_ACCESS) {
                 let _ = ow.delete_value(&old_pid);
             }
         }
@@ -86,13 +90,15 @@ pub fn migrate_legacy_brand() {
     ] {
         if registry::is_our_legacy_shell_key(base) {
             let _ = delete_key(base);
+            changed = true;
         }
     }
     // 旧自启项（仅当指向 JsonViewer）与旧应用键（含 managed_keys 清单）
-    if let Ok(run) = open_key(autostart::RUN_KEY) {
+    if let Ok(run) = registry::open_key_write(autostart::RUN_KEY) {
         if let Ok(v) = run.get_value::<String, _>("JsonViewer") {
             if v.to_lowercase().contains("jsonviewer") {
                 let _ = run.delete_value("JsonViewer");
+                changed = true;
             }
         }
     }
@@ -100,8 +106,11 @@ pub fn migrate_legacy_brand() {
         || registry::key_exists(r"Software\JsonViewer\managed_keys")
     {
         let _ = delete_key(r"Software\JsonViewer");
+        changed = true;
     }
-    registry::notify_shell_assoc_changed();
+    if changed {
+        registry::notify_shell_assoc_changed();
+    }
 }
 
 /// 一键清理：移除所有系统集成痕迹

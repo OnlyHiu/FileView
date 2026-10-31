@@ -66,31 +66,53 @@ pub fn exe_path() -> String {
         .unwrap_or_else(|_| "fileview.exe".to_string())
 }
 
+/// 右键菜单显示名
+const MENU_VERB: &str = "用 FileView 打开";
+
 /// 菜单图标：默认用程序自身图标
 fn icon_value() -> String {
     format!("{},0", exe_path())
 }
 
 /// 注入右键菜单（targets 为空表示移除该目标）
+///
+/// **幂等**：已处于目标状态的目标会被跳过，不做任何写入。
+/// 只有真正发生了变更时才广播 Shell 通知——`SHCNE_ASSOCCHANGED` 会让
+/// 资源管理器重读整个文件关联数据库并刷新桌面，若每次启动都广播，
+/// 用户会看到桌面图标闪烁。
 pub fn install(targets: &[MenuTarget]) -> Result<Vec<String>, String> {
     let mut installed = Vec::new();
+    let mut changed = false;
+    let command = format!("\"{}\" \"%1\"", exe_path());
+    let icon = icon_value();
     for target in targets {
         let key_path = target.key_path();
+        // 已经注册好且内容一致 → 跳过
+        let already_ok = registry::get_string(&key_path, "MUIVerb").as_deref() == Some(MENU_VERB)
+            && registry::get_string(&key_path, "Icon").as_deref() == Some(icon.as_str())
+            && registry::get_string(&format!(r"{}\command", key_path), "").as_deref()
+                == Some(command.as_str());
+        if already_ok {
+            installed.push(target.id().to_string());
+            continue;
+        }
         let key = registry::create_key(&key_path).map_err(|e| format!("创建注册表键失败: {}", e))?;
-        registry::set_string(&key, "MUIVerb", "用 FileView 打开")
+        registry::set_string(&key, "MUIVerb", MENU_VERB)
             .map_err(|e| format!("写入菜单名称失败: {}", e))?;
-        registry::set_string(&key, "Icon", &icon_value())
+        registry::set_string(&key, "Icon", &icon)
             .map_err(|e| format!("写入图标失败: {}", e))?;
         // SubCommands 留空表示无子菜单
         let cmd_key_path = format!(r"{}\command", key_path);
         let cmd_key =
             registry::create_key(&cmd_key_path).map_err(|e| format!("创建 command 键失败: {}", e))?;
-        let command = format!("\"{}\" \"%1\"", exe_path());
         registry::set_string(&cmd_key, "", &command).map_err(|e| format!("写入命令失败: {}", e))?;
         registry::record_managed_key(&key_path).map_err(|e| format!("记录管理键失败: {}", e))?;
         installed.push(target.id().to_string());
+        changed = true;
     }
-    registry::notify_shell_assoc_changed();
+    if changed {
+        registry::notify_shell_assoc_changed();
+    }
     Ok(installed)
 }
 
@@ -117,7 +139,10 @@ pub fn uninstall(targets: &[MenuTarget]) -> Result<Vec<String>, String> {
             removed.push(target.id().to_string());
         }
     }
-    registry::notify_shell_assoc_changed();
+    // 只有真的移除了菜单项才通知 Shell
+    if !removed.is_empty() {
+        registry::notify_shell_assoc_changed();
+    }
     Ok(removed)
 }
 

@@ -87,28 +87,50 @@ pub fn register_many(exts: &[String]) -> Result<Vec<String>, String> {
         normalized.push(e.to_string());
     }
     let mut done = Vec::new();
+    let mut changed = false;
     for ext in &normalized {
-        register_internal(ext)?;
+        if register_internal(ext)? {
+            changed = true;
+        }
         done.push(ext.clone());
     }
-    if !done.is_empty() {
+    // 只有真的发生了变更才广播：
+    // SHCNE_ASSOCCHANGED 会让资源管理器重读整个关联数据库并刷新桌面，
+    // 无谓广播会让用户看到桌面图标闪烁。
+    if changed {
         let _ = refresh_capabilities();
         registry::notify_shell_assoc_changed();
     }
     Ok(done)
 }
 
-/// 注册单个扩展名（不含能力表刷新与 Shell 广播）
-fn register_internal(ext: &str) -> Result<(), String> {
+/// 注册单个扩展名（不含能力表刷新与 Shell 广播）。
+/// 返回 true 表示注册表内容确实发生了变化。
+fn register_internal(ext: &str) -> Result<bool, String> {
     let ext = ext.trim_start_matches('.');
     if !SUPPORTED_EXTS.contains(&ext) {
         return Err(format!("不支持的扩展名: {}", ext));
     }
     let pid = prog_id(ext);
     let exe = super::context_menu::exe_path();
+    let command = format!("\"{}\" \"%1\"", exe);
+    let icon = format!("{},0", exe);
+
+    let pid_path = format!(r"Software\Classes\{}", pid);
+    let ext_path = format!(r"Software\Classes\.{}", ext);
+
+    // 已处于目标状态 → 无需写入（幂等启动的关键）
+    let already_ok = registry::get_string(&pid_path, "FriendlyTypeName").as_deref() == Some("FileView")
+        && registry::get_string(format!(r"{}\DefaultIcon", pid_path), "").as_deref()
+            == Some(icon.as_str())
+        && registry::get_string(format!(r"{}\shell\open\command", pid_path), "").as_deref()
+            == Some(command.as_str())
+        && registry::value_exists(format!(r"{}\OpenWithProgids", ext_path), &pid);
+    if already_ok {
+        return Ok(false);
+    }
 
     // ProgID 键
-    let pid_path = format!(r"Software\Classes\{}", pid);
     let key = registry::create_key(&pid_path).map_err(|e| format!("创建 ProgID 失败: {}", e))?;
     registry::set_string(&key, "", &format!("FileView 文件 (.{})", ext))
         .map_err(|e| format!("写 ProgID 描述失败: {}", e))?;
@@ -118,7 +140,7 @@ fn register_internal(ext: &str) -> Result<(), String> {
     // DefaultIcon
     let icon_key = registry::create_key(format!(r"{}\DefaultIcon", pid_path))
         .map_err(|e| format!("创建 DefaultIcon 失败: {}", e))?;
-    registry::set_string(&icon_key, "", &format!("{},0", exe))
+    registry::set_string(&icon_key, "", &icon)
         .map_err(|e| format!("写图标失败: {}", e))?;
 
     // shell\open\command
@@ -147,7 +169,7 @@ fn register_internal(ext: &str) -> Result<(), String> {
 
     registry::record_managed_key(&pid_path).map_err(|e| e.to_string())?;
     registry::record_managed_key(&ext_path).map_err(|e| e.to_string())?;
-    Ok(())
+    Ok(true)
 }
 
 /// 批量注销：只刷新一次能力表、只广播一次 Shell 通知。
@@ -162,11 +184,15 @@ pub fn unregister_many(exts: &[String]) -> Result<Vec<String>, String> {
         normalized.push(e.to_string());
     }
     let mut done = Vec::new();
+    let mut changed = false;
     for ext in &normalized {
-        unregister_internal(ext)?;
+        if unregister_internal(ext)? {
+            changed = true;
+        }
         done.push(ext.clone());
     }
-    if !done.is_empty() {
+    // 只有真的发生了变更才广播，避免无谓的桌面图标刷新
+    if changed {
         let _ = refresh_capabilities();
         registry::notify_shell_assoc_changed();
     }
@@ -174,7 +200,7 @@ pub fn unregister_many(exts: &[String]) -> Result<Vec<String>, String> {
 }
 
 /// 注销单个扩展名（不含能力表刷新与 Shell 广播）
-fn unregister_internal(ext: &str) -> Result<(), String> {
+fn unregister_internal(ext: &str) -> Result<bool, String> {
     let ext = ext.trim_start_matches('.');
     // 与 register 对称：只允许处理受支持的扩展名，
     // 避免 settings.json 被手工改成任意字符串后误删同名键。
@@ -183,25 +209,28 @@ fn unregister_internal(ext: &str) -> Result<(), String> {
     }
     let pid = prog_id(ext);
     let pid_path = format!(r"Software\Classes\{}", pid);
+    let mut changed = false;
     if registry::key_exists(&pid_path) {
         registry::delete_key(&pid_path).map_err(|e| format!("删除 ProgID 失败: {}", e))?;
+        changed = true;
     }
     let ext_path = format!(r"Software\Classes\.{}", ext);
     if let Ok(ext_key) = registry::open_key(&ext_path) {
-        // 只移除我们的 OpenWithProgids 项与默认值引用，不删除用户其他打开方式
         if let Ok(ow_key) = ext_key.open_subkey("OpenWithProgids") {
-            let _ = ow_key.delete_value(&pid);
+            if ow_key.delete_value(&pid).is_ok() {
+                changed = true;
+            }
         }
         if let Ok(default) = ext_key.get_value::<String, _>("") {
             if default == pid {
                 let _ = ext_key.delete_value("");
+                changed = true;
             }
         }
     }
-    // 注入已移除，同步清理受管理清单记录，避免计数虚高
     let _ = registry::forget_managed_key(&pid_path);
     let _ = registry::forget_managed_key(&ext_path);
-    Ok(())
+    Ok(changed)
 }
 
 /// 查询各扩展名的注册状态

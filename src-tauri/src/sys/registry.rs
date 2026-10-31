@@ -108,6 +108,25 @@ pub fn open_key(path: impl AsRef<str>) -> std::io::Result<RegKey> {
     hkcu.open_subkey(&scoped(path.as_ref()))
 }
 
+/// 打开子键（读写，用于删除值）
+pub fn open_key_write(path: impl AsRef<str>) -> std::io::Result<RegKey> {
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    hkcu.open_subkey_with_flags(&scoped(path.as_ref()), KEY_ALL_ACCESS)
+}
+
+/// 读取子键中某个字符串值（不存在时返回 None）
+pub fn get_string(path: impl AsRef<str>, name: &str) -> Option<String> {
+    open_key(path).ok()?.get_value::<String, _>(name).ok()
+}
+
+/// 判断子键中某个值是否存在（不关心类型，REG_NONE 也算存在）
+pub fn value_exists(path: impl AsRef<str>, name: &str) -> bool {
+    match open_key(path) {
+        Ok(k) => k.get_raw_value(name).is_ok(),
+        Err(_) => false,
+    }
+}
+
 /// 写字符串值
 pub fn set_string(key: &RegKey, name: &str, value: &str) -> std::io::Result<()> {
     key.set_value(name, &value)
