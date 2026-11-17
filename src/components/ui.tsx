@@ -398,13 +398,23 @@ export const Slider: React.FC<{
 
 // ============ Tooltip（CSS 实现）============
 
-export const Tooltip: React.FC<{ text: string; children: React.ReactNode }> = ({
-  text,
-  children,
-}) => (
+export const Tooltip: React.FC<{
+  text: string;
+  children: React.ReactNode;
+  /** 气泡对齐方式：靠近屏幕边缘时用 left/right，避免被 #root 的 overflow:hidden 裁切 */
+  align?: "left" | "center" | "right";
+}> = ({ text, children, align = "center" }) => (
   <span className="relative group inline-flex">
     {children}
-    <span className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2 py-1 rounded-sm bg-smoke-bg-layer border border-stroke shadow-flyout text-[11px] text-ink whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity duration-150 z-40">
+    <span
+      className={`pointer-events-none absolute bottom-full mb-1.5 px-2 py-1 rounded-sm bg-smoke-bg-layer border border-stroke shadow-flyout text-[11px] text-ink whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity duration-150 z-40 ${
+        align === "left"
+          ? "left-0"
+          : align === "right"
+            ? "right-0"
+            : "left-1/2 -translate-x-1/2"
+      }`}
+    >
       {text}
     </span>
   </span>

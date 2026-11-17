@@ -183,6 +183,18 @@ function docStateFor(tab: Tab | undefined, currentView: ViewMode) {
   return { fileKind: kind, view: resolveView(currentView, kind) } as const;
 }
 
+/**
+ * 打开 Markdown/HTML 时默认展开预览面板：这类文件的主要用途就是看渲染效果，
+ * 不必再手动点菜单切到「预览视图」。其余文件类型保持原面板状态。
+ */
+function autoPreviewFor(tab: Tab | undefined): { view: ViewMode; panel: PanelKind } | null {
+  const kind = kindFromPath(tab?.path ?? null);
+  if (kind === "markdown" || kind === "html") {
+    return { view: "preview", panel: "viewer" };
+  }
+  return null;
+}
+
 /** 标签页是否有未保存的更改 */
 export function isTabDirty(t: Tab): boolean {
   if (t.path) return diskBaselines.get(t.path) !== t.text;
@@ -298,6 +310,7 @@ export const useJsonStore = create<JsonState>((set, get) => ({
           expanded: {},
           selectedId: null,
           ...docStateFor(existing, s.view),
+          ...(autoPreviewFor(existing) ?? {}),
         };
       }
       const t: Tab = { id: tabSeq++, name, path, text };
@@ -310,6 +323,7 @@ export const useJsonStore = create<JsonState>((set, get) => ({
         expanded: {},
         selectedId: null,
         ...docStateFor(t, s.view),
+        ...(autoPreviewFor(t) ?? {}),
       };
     });
     void get().reparse();
@@ -332,6 +346,7 @@ export const useJsonStore = create<JsonState>((set, get) => ({
         expanded: {},
         selectedId: null,
         ...docStateFor(t, s.view),
+        ...(autoPreviewFor(t) ?? {}),
       };
     });
     void get().reparse();

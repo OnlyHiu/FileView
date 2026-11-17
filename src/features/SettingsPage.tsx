@@ -305,7 +305,7 @@ export const SettingsPage: React.FC = () => {
       <Card
         icon="info"
         title="FileView"
-        description="v0.2.0 · Tauri 2 + React + Vite + Tailwind CSS"
+        description="v0.2.1 · Tauri 2 + React + Vite + Tailwind CSS"
       >
         <div className="text-[12px] text-ink-secondary leading-5">
           Windows 11 Fluent 风格的多格式文件查看与编辑器。支持 JSON / JSONC / JSONL、Markdown、

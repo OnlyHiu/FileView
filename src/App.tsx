@@ -32,6 +32,7 @@ import {
 import { getDiskBaseline, isTabDirty } from "./stores/jsonStore";
 import {
   viewsFor,
+  defaultViewFor,
   kindLabel,
   langFromPath,
   type ParseMode,
@@ -42,7 +43,7 @@ import {
 /** 分离窗口只应消费一次负载（React StrictMode 下 effect 会执行两次） */
 let detachPayloadHandled = false;
 
-const APP_VERSION = "0.2.0";
+const APP_VERSION = "0.2.1";
 
 export default function App() {
   const panel = useJsonStore((s) => s.panel);
@@ -552,15 +553,17 @@ export default function App() {
       : null;
 
   const isJson = fileKind === "json";
-  const canPreview = viewsFor(fileKind).some((v) => v.value === "preview");
-  const previewActive = panel === "viewer" && view === "preview";
+  // 眼睛按钮：打开查看工具面板并切到该文件大类的默认视图
+  // （Markdown/HTML → 预览，JSON → 树形，CSV → 表格，配置类 → 结构）
+  const previewView = defaultViewFor(fileKind);
+  const previewActive = panel === "viewer" && view === previewView;
 
   const togglePreview = () => {
     if (previewActive) {
       setPanel("none");
       return;
     }
-    setView("preview");
+    setView(previewView);
     setPanel("viewer");
   };
 
@@ -702,7 +705,12 @@ export default function App() {
 
       {/* ============ 工具栏 ============ */}
       <div className="flex items-center gap-0.5 px-2 h-10 border-b border-stroke/60 shrink-0">
-        <ToolButton icon="plus" title="新建标签 (Ctrl+N)" onClick={newTab} />
+        <ToolButton
+          icon="plus"
+          title="新建标签 (Ctrl+N)"
+          onClick={newTab}
+          tooltipAlign="left"
+        />
         <ToolButton icon="open" title="打开文件 (Ctrl+O)" onClick={() => void handleOpen()} />
         <ToolButton
           icon="save"
@@ -721,17 +729,10 @@ export default function App() {
         <ToolButton icon="redo" title="重做 (Ctrl+Y)" onClick={redo} disabled={!activeTab} />
         <ToolDivider />
         <ToolButton
-          icon="tree"
-          title="查看工具 (Ctrl+B)"
-          onClick={() => togglePanel("viewer")}
-          active={panel === "viewer"}
-        />
-        <ToolButton
           icon="eye"
-          title={canPreview ? "预览 (再次点击关闭)" : "当前文件不支持预览"}
+          title="预览 (Ctrl+B)"
           onClick={togglePreview}
           active={previewActive}
-          disabled={!canPreview}
         />
         <ToolButton
           icon="external"
@@ -756,6 +757,7 @@ export default function App() {
           icon={theme === "dark" ? "sun" : "moon"}
           title={theme === "dark" ? "切换到浅色模式" : "切换到深色模式"}
           onClick={toggleTheme}
+          tooltipAlign="right"
         />
       </div>
 
@@ -910,8 +912,9 @@ const ToolButton: React.FC<{
   onClick: () => void;
   disabled?: boolean;
   active?: boolean;
-}> = ({ icon, title, onClick, disabled, active }) => (
-  <Tooltip text={title}>
+  tooltipAlign?: "left" | "center" | "right";
+}> = ({ icon, title, onClick, disabled, active, tooltipAlign }) => (
+  <Tooltip text={title} align={tooltipAlign}>
     <button
       onClick={onClick}
       disabled={disabled}

@@ -75,8 +75,8 @@ FileView 是一款 Windows 桌面应用，采用 Notepad++ 的操作逻辑：**�
 
 | 文件 | 说明 |
 |---|---|
-| [**FileView_0.2.0_x64_zh-CN.msi**](https://github.com/OnlyHiu/FileView/releases/latest/download/FileView_0.2.0_x64_zh-CN.msi) | MSI 安装包（简体中文，推荐）|
-| [**FileView_0.2.0_x64_en-US.msi**](https://github.com/OnlyHiu/FileView/releases/latest/download/FileView_0.2.0_x64_en-US.msi) | MSI 安装包（英文）|
+| [**FileView_0.2.1_x64_zh-CN.msi**](https://github.com/OnlyHiu/FileView/releases/latest/download/FileView_0.2.1_x64_zh-CN.msi) | MSI 安装包（简体中文，推荐）|
+| [**FileView_0.2.1_x64_en-US.msi**](https://github.com/OnlyHiu/FileView/releases/latest/download/FileView_0.2.1_x64_en-US.msi) | MSI 安装包（英文）|
 | [**fileview.exe**](https://github.com/OnlyHiu/FileView/releases/latest/download/fileview.exe) | 免安装单文件，双击即用 |
 
 > 安装包使用 **Microsoft WiX Toolset** 官方工具链生成（MSI 格式）。
