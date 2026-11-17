@@ -9,13 +9,19 @@ export const PANEL_MIN_WIDTH = 340;
 export const SidePanel: React.FC<{
   title: string;
   icon?: string;
+  /** 标题栏 × 按钮：直接关闭本面板 */
   onClose: () => void;
+  /**
+   * Esc 键的处理：默认与 × 按钮一致；
+   * 存在查找栏等上层浮层时，可传入「先关上层、再关面板」的处理。
+   */
+  onEscape?: () => void;
   /** 标题栏右侧的附加控件（视图切换等） */
   headerExtra?: React.ReactNode;
   children: React.ReactNode;
   width: number;
   onWidthChange: (w: number) => void;
-}> = ({ title, icon, onClose, headerExtra, children, width, onWidthChange }) => {
+}> = ({ title, icon, onClose, onEscape, headerExtra, children, width, onWidthChange }) => {
   const draggingRef = useRef(false);
 
   const onPointerDown = useCallback(
@@ -45,11 +51,11 @@ export const SidePanel: React.FC<{
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       if (document.querySelector('[role="dialog"]')) return;
-      onClose();
+      (onEscape ?? onClose)();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [onClose, onEscape]);
 
   return (
     <aside

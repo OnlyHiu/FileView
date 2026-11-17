@@ -526,11 +526,42 @@ export default function App() {
     useSettingsStore.setState((s) => ({ settings: { ...s.settings, fontSize: next } }));
   }, [settings.fontSize]);
 
-  // 关闭面板：查找栏打开时优先关闭查找栏
-  const closePanel = useCallback(() => {
+  // 面板关闭：
+  //   · × 按钮：直接关闭面板（此前会误关查找栏）
+  //   · Esc：查找栏打开时优先关查找栏，再按才关面板
+  const closeSidePanel = useCallback(() => {
+    setPanel("none");
+  }, [setPanel]);
+
+  const closePanelByEsc = useCallback(() => {
     if (findOpen) closeFind();
     else setPanel("none");
   }, [findOpen, closeFind, setPanel]);
+
+  /** 查找栏开合切换（Ctrl+F / 菜单）：关闭时一并收起底部搜索结果窗口 */
+  const toggleFind = useCallback(() => {
+    if (findOpen) {
+      closeFind();
+      setResultsOpen(false);
+      return;
+    }
+    openFind();
+    setResultsOpen(true);
+  }, [findOpen, closeFind, openFind, setResultsOpen]);
+
+  /** 替换行：关闭查找栏时一并收起 */
+  const toggleReplaceRow = useCallback(() => {
+    if (!findOpen) {
+      openFind();
+      setResultsOpen(true);
+    }
+    toggleReplace();
+  }, [findOpen, openFind, toggleReplace, setResultsOpen]);
+
+  // 查找栏关闭后，底部的搜索结果窗口一并关闭
+  useEffect(() => {
+    if (!findOpen) setResultsOpen(false);
+  }, [findOpen, setResultsOpen]);
 
   // ============ 快捷键 ============
   useEffect(() => {
@@ -561,13 +592,10 @@ export default function App() {
         void searchFolder();
       } else if (ctrl && key === "f") {
         e.preventDefault();
-        openFind();
-        setResultsOpen(true);
+        toggleFind();
       } else if (ctrl && key === "h") {
         e.preventDefault();
-        openFind();
-        toggleReplace();
-        setResultsOpen(true);
+        toggleReplaceRow();
       } else if (ctrl && key === "g") {
         e.preventDefault();
         togglePanel("query");
@@ -607,7 +635,9 @@ export default function App() {
     saveFileAs,
     newTab,
     closeTab,
-    openFind,
+    toggleFind,
+    toggleReplaceRow,
+    searchFolder,
     findNext,
     togglePanel,
     undo,
@@ -826,16 +856,9 @@ export default function App() {
         onReparse={() => void reparse()}
         onCopyText={() => void copyAllText()}
         onCopyPath={() => void copyFilePath()}
-        onFind={() => {
-          openFind();
-          setResultsOpen(true);
-        }}
+        onFind={toggleFind}
         onFindNext={findNext}
-        onReplace={() => {
-          openFind();
-          toggleReplace();
-          setResultsOpen(true);
-        }}
+        onReplace={toggleReplaceRow}
         onSearchFolder={() => void searchFolder()}
         onQueryPanel={() => togglePanel("query")}
         onDetach={handleDetachActive}
@@ -869,7 +892,7 @@ export default function App() {
         <ToolButton
           icon="search"
           title="查找 (Ctrl+F)"
-          onClick={openFind}
+          onClick={toggleFind}
           disabled={!activeTab}
         />
         <ToolButton icon="undo" title="撤销 (Ctrl+Z)" onClick={undo} disabled={!activeTab} />
@@ -964,7 +987,8 @@ export default function App() {
             <SidePanel
               title={panelTitle}
               icon={panel === "settings" ? "settings" : panel === "query" ? "search" : "tree"}
-              onClose={closePanel}
+              onClose={closeSidePanel}
+              onEscape={closePanelByEsc}
               width={panelWidth}
               onWidthChange={(w) => {
                 panelWidthManualRef.current = true;
