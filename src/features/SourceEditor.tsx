@@ -9,6 +9,7 @@
 import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { useSettingsStore } from "../stores/settingsStore";
 import { WindowHighlighter, visibleLineRange } from "../lib/highlightWindow";
+import type { Token } from "../lib/highlight";
 import type { Lang } from "../lib/types";
 
 export interface RevealTarget {
@@ -22,6 +23,61 @@ export interface RevealTarget {
 
 /** 视口外额外渲染的行数，避免快速滚动时露出空白 */
 const OVERSCAN = 20;
+
+/** 命中区间（字符偏移） */
+export interface HighlightRange {
+  start: number;
+  end: number;
+}
+
+/** 带高亮标记的 token */
+interface MarkedToken {
+  cls: string;
+  text: string;
+  /** none = 普通文本；hit = 命中；active = 当前命中 */
+  mark: "none" | "hit" | "active";
+}
+
+/**
+ * 把一行的 token 按命中区间切分，给命中片段打标记。
+ * token 文本与源文本逐字符对应，因此可以直接按字符偏移切分。
+ */
+function markTokens(
+  tokens: Token[],
+  lineStart: number,
+  ranges: HighlightRange[],
+  active: HighlightRange | null
+): MarkedToken[] {
+  const out: MarkedToken[] = [];
+  let pos = lineStart;
+  for (const t of tokens) {
+    const tStart = pos;
+    const tEnd = pos + t.text.length;
+    pos = tEnd;
+    let cur = tStart;
+    for (const r of ranges) {
+      if (r.end <= cur) continue;
+      if (r.start >= tEnd) break;
+      const s = Math.max(cur, r.start);
+      const e = Math.min(tEnd, r.end);
+      if (s > cur) {
+        out.push({ cls: t.cls, text: t.text.slice(cur - tStart, s - tStart), mark: "none" });
+      }
+      const isActive = !!active && active.start === r.start && active.end === r.end;
+      out.push({
+        cls: t.cls,
+        text: t.text.slice(s - tStart, e - tStart),
+        mark: isActive ? "active" : "hit",
+      });
+      cur = e;
+      if (cur >= tEnd) break;
+    }
+    if (cur < tEnd) {
+      out.push({ cls: t.cls, text: t.text.slice(cur - tStart), mark: "none" });
+    }
+  }
+  return out;
+}
 
 export const SourceEditor: React.FC<{
   text: string;
@@ -39,6 +95,10 @@ export const SourceEditor: React.FC<{
    * 用户继续输入的字符会被插进文档正文。
    */
   focusOnReveal?: boolean;
+  /** 命中区间（字符偏移），在文档中高亮 */
+  highlights?: HighlightRange[];
+  /** 当前命中的区间（高亮加深） */
+  activeHighlight?: HighlightRange | null;
   /** 文档为空时自动聚焦，便于直接粘贴内容 */
   autoFocus?: boolean;
 }> = ({
@@ -49,6 +109,8 @@ export const SourceEditor: React.FC<{
   readOnly = false,
   reveal = null,
   focusOnReveal = true,
+  highlights,
+  activeHighlight = null,
   autoFocus = false,
 }) => {
   const fontSize = useSettingsStore((s) => s.settings.fontSize);
@@ -181,6 +243,29 @@ export const SourceEditor: React.FC<{
     [highlighter, firstLine, lastLine]
   );
 
+  // 命中高亮：只取与可见区域相交的命中区间（命中很多时也不会拖慢渲染）
+  const markedLines = useMemo(() => {
+    if (!highlights || highlights.length === 0) return null;
+    const winStart = highlighter.lineStart(firstLine);
+    const winEnd = highlighter.lineStart(lastLine);
+    // 命中区间按起点升序，二分找出窗口内的第一条
+    let lo = 0;
+    let hi = highlights.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (highlights[mid].end <= winStart) lo = mid + 1;
+      else hi = mid;
+    }
+    const inWindow: HighlightRange[] = [];
+    for (let i = lo; i < highlights.length && highlights[i].start < winEnd; i++) {
+      inWindow.push(highlights[i]);
+    }
+    return visibleLines.map((tokens, i) => {
+      const lineNo = firstLine + i;
+      return markTokens(tokens, highlighter.lineStart(lineNo), inWindow, activeHighlight);
+    });
+  }, [visibleLines, firstLine, lastLine, highlighter, highlights, activeHighlight]);
+
   return (
     <div
       className="relative h-full overflow-hidden font-mono"
@@ -226,7 +311,7 @@ export const SourceEditor: React.FC<{
         className="absolute left-12 top-0 right-0 bottom-0 overflow-hidden pointer-events-none"
       >
         <div ref={contentRef} className="absolute top-0 left-0 right-0">
-          {visibleLines.map((tokens, i) => {
+          {(markedLines ?? visibleLines).map((tokens, i) => {
             const lineNo = firstLine + i + 1;
             return (
               <div
@@ -235,7 +320,21 @@ export const SourceEditor: React.FC<{
                 style={{ top: (lineNo - 1) * lineHeightPx, height: lineHeightPx }}
               >
                 {tokens.map((t, j) => (
-                  <span key={j} className={t.cls}>
+                  <span
+                    key={j}
+                    className={t.cls}
+                    style={
+                      "mark" in t && t.mark !== "none"
+                        ? {
+                            background:
+                              t.mark === "active"
+                                ? "rgba(255, 152, 0, 0.55)"
+                                : "rgba(255, 193, 7, 0.32)",
+                            borderRadius: "2px",
+                          }
+                        : undefined
+                    }
+                  >
                     {t.text}
                   </span>
                 ))}

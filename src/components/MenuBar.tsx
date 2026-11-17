@@ -43,6 +43,10 @@ export interface MenuBarProps {
   onCopyPath: () => void;
   onFind: () => void;
   onFindNext: () => void;
+  /** 文档替换（展开替换行） */
+  onReplace: () => void;
+  /** 在文件夹中搜索 */
+  onSearchFolder: () => void;
   onReparse: () => void;
   onQueryPanel: () => void;
   onFormat: () => void;
@@ -110,7 +114,15 @@ export const MenuBar: React.FC<MenuBarProps> = (p) => {
       {
         label: "搜索",
         entries: [
-          { label: "文档内查找…", shortcut: "Ctrl+F", disabled: !p.hasTab, onClick: p.onFind },
+          { label: "文档查找…", shortcut: "Ctrl+F", disabled: !p.hasTab, onClick: p.onFind },
+          { label: "文档替换…", shortcut: "Ctrl+H", disabled: !p.hasTab, onClick: p.onReplace },
+          {
+            label: "在文件夹中搜索",
+            shortcut: "Ctrl+Alt+F",
+            disabled: !p.hasTab,
+            onClick: p.onSearchFolder,
+          },
+          "separator",
           {
             label: "JSONPath 查询",
             shortcut: "Ctrl+G",

@@ -72,6 +72,12 @@ interface JsonState {
    * 查找栏打开期间定位不抢输入焦点，关闭时再交还焦点。
    */
   findFocus: { start: number; end: number; nonce: number } | null;
+  /** 替换内容 */
+  replaceQuery: string;
+  /** 是否展开替换行 */
+  replaceOpen: boolean;
+  /** 外部定位请求（搜索结果面板点击命中）：按路径 + 偏移定位 */
+  docReveal: { path: string; offset: number; length: number; nonce: number } | null;
 
   // actions
   setPanel: (p: PanelKind) => void;
@@ -110,6 +116,13 @@ interface JsonState {
   syncFind: () => void;
   findNext: () => void;
   findPrev: () => void;
+  setReplaceQuery: (q: string) => void;
+  toggleReplace: () => void;
+  /** 替换当前命中并定位到下一处 */
+  replaceCurrent: () => void;
+  /** 替换文档内全部命中 */
+  replaceAll: () => void;
+  revealAt: (path: string, offset: number, length: number) => void;
   applyFormat: () => Promise<void>;
   applyMinify: () => Promise<void>;
   applySort: () => Promise<void>;
@@ -247,6 +260,9 @@ export const useJsonStore = create<JsonState>((set, get) => ({
   findNonce: 0,
   findNavigated: false,
   findFocus: null,
+  replaceQuery: "",
+  replaceOpen: false,
+  docReveal: null,
 
   setPanel: (p) => set({ panel: p }),
 
@@ -338,6 +354,8 @@ export const useJsonStore = create<JsonState>((set, get) => ({
         ...(autoPreviewFor(t) ?? {}),
       };
     });
+    // 文档换了：命中偏移必须按新文档重算，否则高亮会标到错误位置
+    get().syncFind();
     void get().reparse();
   },
 
@@ -361,6 +379,7 @@ export const useJsonStore = create<JsonState>((set, get) => ({
         ...(autoPreviewFor(t) ?? {}),
       };
     });
+    get().syncFind();
     void get().reparse();
   },
 
@@ -370,6 +389,7 @@ export const useJsonStore = create<JsonState>((set, get) => ({
     set((s) => ({
       tabs: s.tabs.map((t) => (t.path === path ? { ...t, text } : t)),
     }));
+    get().syncFind();
     void get().reparse();
   },
 
@@ -632,16 +652,14 @@ export const useJsonStore = create<JsonState>((set, get) => ({
 
   openFind: () => set({ findOpen: true, findNavigated: false }),
 
-  // 关闭查找栏：记录最后命中的位置，关闭后把光标与焦点交还编辑区
+  // 关闭查找栏：记录最后命中的位置，关闭后把光标与焦点交还编辑区。
+  // 查询词与命中保留：重新打开时沿用上次的搜索词，命中高亮也不消失。
   closeFind: () =>
     set((s) => {
       const start = s.findIndex >= 0 ? s.findMatches[s.findIndex] : undefined;
       const len = s.findQuery.length;
       return {
         findOpen: false,
-        findQuery: "",
-        findMatches: [],
-        findIndex: -1,
         findNavigated: false,
         findFocus:
           start !== undefined && len > 0
@@ -677,7 +695,9 @@ export const useJsonStore = create<JsonState>((set, get) => ({
   // 注意：不递增 findNonce —— 用户正在打字时不能把光标抢到命中处。
   syncFind: () => {
     const s = get();
-    if (!s.findOpen || !s.findQuery) {
+    // 查询词保留在状态里（关闭查找栏也不清空）：命中高亮因此持续可见，
+    // 重新打开查找栏时还能沿用上次的搜索词。
+    if (!s.findQuery) {
       if (s.findMatches.length || s.findIndex !== -1) {
         set({ findMatches: [], findIndex: -1 });
       }
@@ -742,6 +762,64 @@ export const useJsonStore = create<JsonState>((set, get) => ({
       statusMessage: `查找命中 ${s.findMatches.length} 处（第 ${idx + 1} 处）`,
     });
   },
+
+  setReplaceQuery: (q) => set({ replaceQuery: q }),
+
+  toggleReplace: () => set((s) => ({ replaceOpen: !s.replaceOpen })),
+
+  /**
+   * 替换当前命中并定位到下一处。
+   * 替换后命中偏移会整体后移，因此替换完成后重新计算命中。
+   */
+  replaceCurrent: () => {
+    const s = get();
+    const query = s.findQuery;
+    if (!query || !s.findMatches.length) {
+      set({ statusMessage: "没有可替换的命中" });
+      return;
+    }
+    const idx = s.findIndex >= 0 ? s.findIndex : 0;
+    const start = s.findMatches[idx];
+    if (start === undefined) return;
+    const tab = s.tabs.find((t) => t.id === s.activeTabId);
+    if (!tab) return;
+    const end = start + query.length;
+    const next = tab.text.slice(0, start) + s.replaceQuery + tab.text.slice(end);
+    get().setEditorText(next);
+    // 命中重新计算后仍停在同一处（findIndex 由 syncFind 保留）
+    set({ statusMessage: `已替换 1 处（共 ${s.findMatches.length} 处）` });
+  },
+
+  /** 替换文档内全部命中 */
+  replaceAll: () => {
+    const s = get();
+    const query = s.findQuery;
+    if (!query) {
+      set({ statusMessage: "请输入查找内容" });
+      return;
+    }
+    const tab = s.tabs.find((t) => t.id === s.activeTabId);
+    if (!tab) return;
+    const count = s.findMatches.length;
+    if (!count) {
+      set({ statusMessage: "没有可替换的命中" });
+      return;
+    }
+    // 用命中偏移从后往前替换，避免偏移随替换内容长度变化而错位
+    const matches = [...s.findMatches].sort((a, b) => b - a);
+    let text = tab.text;
+    for (const start of matches) {
+      text = text.slice(0, start) + s.replaceQuery + text.slice(start + query.length);
+    }
+    get().setEditorText(text);
+    set({ statusMessage: `已替换 ${count} 处` });
+  },
+
+  /** 外部定位请求：搜索结果面板点击命中后跳转到指定位置 */
+  revealAt: (path, offset, length) =>
+    set((s) => ({
+      docReveal: { path, offset, length, nonce: (s.docReveal?.nonce ?? 0) + 1 },
+    })),
 
   setQueryExpr: (e) => set({ queryExpr: e }),
 

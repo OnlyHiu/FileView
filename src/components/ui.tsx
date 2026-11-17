@@ -33,6 +33,8 @@ const ICON_PATHS: Record<string, string> = {
   info: "M12 3a9 9 0 1 1 0 18 9 9 0 0 1 0-18zm0 4v5m0 4h.01",
   warning: "M12 3l10 18H2zM12 9v5m0 3h.01",
   eye: "M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z",
+  history: "M12 7v5l3 2M3.5 12a8.5 8.5 0 1 0 2.6-6.1M3.5 4.5V9H8",
+  replace: "M4 8h13l-3-3M20 16H7l3 3",
   undo: "M9 7H5V3M5.5 7a8 8 0 1 1-1 9",
   redo: "M15 7h4V3M18.5 7a8 8 0 1 0 1 9",
 };

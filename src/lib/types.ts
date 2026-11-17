@@ -476,6 +476,36 @@ export interface Tab {
   text: string;
 }
 
+/** 文件夹搜索的单条命中 */
+export interface SearchHit {
+  /** 文件路径 */
+  path: string;
+  /** 行号（1 起） */
+  line: number;
+  /** 列号（1 起） */
+  column: number;
+  /** 命中起始字符偏移（整个文件） */
+  offset: number;
+  /** 命中长度（字符） */
+  length: number;
+  /** 命中所在整行文本 */
+  text: string;
+}
+
+/** 文件夹搜索结果 */
+export interface FolderSearchResult {
+  hits: SearchHit[];
+  scanned_files: number;
+  skipped_files: number;
+  truncated: boolean;
+}
+
+/** 批量替换结果 */
+export interface ReplaceResult {
+  changed_files: number;
+  replaced: number;
+}
+
 export const MENU_TARGETS: { id: string; label: string; desc: string }[] = [
   { id: "all_files", label: "所有文件", desc: "任意文件的右键菜单" },
   { id: "json_files", label: "JSON 文件", desc: "*.json 文件" },

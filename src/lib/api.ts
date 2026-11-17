@@ -4,9 +4,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { SUPPORTED_EXTS } from "./types";
 import type {
   FilePayload,
+  FolderSearchResult,
   IntegrationStatus,
   ParseMode,
   ParseResult,
+  ReplaceResult,
   Settings,
   FlatNode,
   NodeKind,
@@ -322,6 +324,38 @@ export const updateSettings = (patch: Partial<Settings>): Promise<Settings> => {
 
 export const getFileMtime = (path: string): Promise<number | null> =>
   isTauri() ? invoke("get_file_mtime", { path }) : Promise.resolve(null);
+
+// ============ 文件夹搜索与批量替换 ============
+
+/** 在文件夹中递归搜索 */
+export const searchInFolder = (
+  root: string,
+  query: string,
+  caseSensitive: boolean,
+  wholeWord: boolean
+): Promise<FolderSearchResult> =>
+  isTauri()
+    ? invoke("search_in_folder", { root, query, caseSensitive, wholeWord })
+    : Promise.resolve({ hits: [], scanned_files: 0, skipped_files: 0, truncated: false });
+
+/** 在指定文件中批量替换 */
+export const replaceInFiles = (
+  paths: string[],
+  query: string,
+  replacement: string,
+  caseSensitive: boolean
+): Promise<ReplaceResult> =>
+  isTauri()
+    ? invoke("replace_in_files", { paths, query, replacement, caseSensitive })
+    : Promise.resolve({ changed_files: 0, replaced: 0 });
+
+/** 选择文件夹（Tauri 原生对话框） */
+export async function pickFolder(): Promise<string | null> {
+  if (!isTauri()) return null;
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  const path = await open({ directory: true, multiple: false });
+  return typeof path === "string" ? path : null;
+}
 
 /** 取启动时命令行传入的文件路径（文件关联打开；只返回一次） */
 export const takeStartupFile = (): Promise<string | null> =>

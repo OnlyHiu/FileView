@@ -19,6 +19,7 @@ import { OutlineView } from "./features/OutlineView";
 import { EmptyState } from "./features/EmptyState";
 import { SourceEditor } from "./features/SourceEditor";
 import { FindBar } from "./features/FindBar";
+import { SearchResultsPanel } from "./features/SearchResultsPanel";
 import { QueryPanel } from "./features/QueryPanel";
 import { SettingsPage } from "./features/SettingsPage";
 import {
@@ -30,6 +31,7 @@ import {
   detachTabToWindow,
 } from "./lib/api";
 import { getDiskBaseline, isTabDirty, type PanelKind } from "./stores/jsonStore";
+import { useSearchStore } from "./stores/searchStore";
 import {
   viewsFor,
   defaultViewFor,
@@ -122,6 +124,11 @@ export default function App() {
   const findNonce = useJsonStore((s) => s.findNonce);
   const findFocus = useJsonStore((s) => s.findFocus);
   const findNext = useJsonStore((s) => s.findNext);
+  const docReveal = useJsonStore((s) => s.docReveal);
+  const toggleReplace = useJsonStore((s) => s.toggleReplace);
+
+  const setResultsOpen = useSearchStore((s) => s.setResultsOpen);
+  const searchFolder = useSearchStore((s) => s.searchFolder);
 
   const settings = useSettingsStore((s) => s.settings);
   const loadSettings = useSettingsStore((s) => s.load);
@@ -549,9 +556,18 @@ export default function App() {
       } else if (ctrl && e.shiftKey && key === "f") {
         e.preventDefault();
         void applyFormat();
+      } else if (ctrl && e.altKey && key === "f") {
+        e.preventDefault();
+        void searchFolder();
       } else if (ctrl && key === "f") {
         e.preventDefault();
         openFind();
+        setResultsOpen(true);
+      } else if (ctrl && key === "h") {
+        e.preventDefault();
+        openFind();
+        toggleReplace();
+        setResultsOpen(true);
       } else if (ctrl && key === "g") {
         e.preventDefault();
         togglePanel("query");
@@ -642,16 +658,37 @@ export default function App() {
   }, [result, fileKind]);
 
   // 查找定位：由 store 的 findNonce 驱动，仅在用户显式导航查找（下一个/上一个）时重新定位，
-  // 避免编辑文档时把光标抢走；查找栏关闭后按 findFocus 定位并把焦点交还编辑区。
-  const revealTarget = findOpen
-    ? findIndex >= 0 && findMatches[findIndex] !== undefined
-      ? {
-          start: findMatches[findIndex],
-          end: findMatches[findIndex] + findQuery.length,
-          nonce: findNonce,
-        }
-      : null
-    : findFocus;
+  // 避免编辑文档时把光标抢走；查找栏关闭后按 findFocus 定位并把焦点交还编辑区；
+  // 搜索结果面板点击命中时按 docReveal 定位。
+  const revealTarget = docReveal && docReveal.path === activeTab?.path
+    ? {
+        start: docReveal.offset,
+        end: docReveal.offset + docReveal.length,
+        nonce: docReveal.nonce,
+      }
+    : findOpen
+      ? findIndex >= 0 && findMatches[findIndex] !== undefined
+        ? {
+            start: findMatches[findIndex],
+            end: findMatches[findIndex] + findQuery.length,
+            nonce: findNonce,
+          }
+        : null
+      : findFocus;
+
+  // 命中高亮：把命中偏移转成区间交给编辑器着色
+  const highlightRanges = useMemo(
+    () =>
+      findQuery
+        ? findMatches.map((m) => ({ start: m, end: m + findQuery.length }))
+        : [],
+    [findMatches, findQuery]
+  );
+  const activeHighlight = useMemo(() => {
+    const m = findIndex >= 0 ? findMatches[findIndex] : undefined;
+    if (m === undefined || !findQuery) return null;
+    return { start: m, end: m + findQuery.length };
+  }, [findMatches, findIndex, findQuery]);
 
   const isJson = fileKind === "json";
   // 眼睛按钮：打开查看工具面板并切到该文件大类的默认视图
@@ -789,8 +826,17 @@ export default function App() {
         onReparse={() => void reparse()}
         onCopyText={() => void copyAllText()}
         onCopyPath={() => void copyFilePath()}
-        onFind={openFind}
+        onFind={() => {
+          openFind();
+          setResultsOpen(true);
+        }}
         onFindNext={findNext}
+        onReplace={() => {
+          openFind();
+          toggleReplace();
+          setResultsOpen(true);
+        }}
+        onSearchFolder={() => void searchFolder()}
         onQueryPanel={() => togglePanel("query")}
         onDetach={handleDetachActive}
         onQuit={() => void windowAction("close")}
@@ -885,57 +931,64 @@ export default function App() {
         </div>
       </div>
 
-      {/* ============ 主区：文档区 + 工具面板 ============ */}
-      <div className="flex-1 min-h-0 flex">
-        <main className="relative flex-1 min-w-0 min-h-0 flex flex-col bg-smoke-bg-layer">
-          {findOpen && <FindBar />}
-          {activeTab ? (
-            <SourceEditor
-              text={activeText}
-              lang={langFromPath(activeTab.path)}
-              onChange={setEditorText}
-              errorLines={errorLines}
-              reveal={revealTarget}
-              focusOnReveal={!findOpen}
-              autoFocus={isDocEmpty}
-            />
-          ) : (
-            <EmptyState onOpen={() => void handleOpen()} />
-          )}
-          {activeTab && isDocEmpty && (
-            <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
-              <div className="text-center text-ink-tertiary text-[13px] leading-6">
-                空白文档 · 按 Ctrl+O 打开文件，或直接粘贴内容
-              </div>
-            </div>
-          )}
-        </main>
-
-        {panel !== "none" && (
-          <SidePanel
-            title={panelTitle}
-            icon={panel === "settings" ? "settings" : panel === "query" ? "search" : "tree"}
-            onClose={closePanel}
-            width={panelWidth}
-            onWidthChange={(w) => {
-              panelWidthManualRef.current = true;
-              setPanelWidth(w);
-            }}
-            headerExtra={
-              panel === "viewer" && !isDocEmpty ? (
-                <div className="flex justify-end">
-                  <SegmentedControl
-                    value={view}
-                    onChange={(v) => setView(v as ViewMode)}
-                    options={viewsFor(fileKind)}
-                  />
+      {/* ============ 主区：文档区 + 工具面板 + 搜索结果 ============ */}
+      <div className="flex-1 min-h-0 flex flex-col">
+        <div className="flex-1 min-h-0 flex">
+          <main className="relative flex-1 min-w-0 min-h-0 flex flex-col bg-smoke-bg-layer">
+            {findOpen && <FindBar />}
+            {activeTab ? (
+              <SourceEditor
+                text={activeText}
+                lang={langFromPath(activeTab.path)}
+                onChange={setEditorText}
+                errorLines={errorLines}
+                reveal={revealTarget}
+                focusOnReveal={!findOpen}
+                highlights={highlightRanges}
+                activeHighlight={activeHighlight}
+                autoFocus={isDocEmpty}
+              />
+            ) : (
+              <EmptyState onOpen={() => void handleOpen()} />
+            )}
+            {activeTab && isDocEmpty && (
+              <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
+                <div className="text-center text-ink-tertiary text-[13px] leading-6">
+                  空白文档 · 按 Ctrl+O 打开文件，或直接粘贴内容
                 </div>
-              ) : null
-            }
-          >
-            {panelBody}
-          </SidePanel>
-        )}
+              </div>
+            )}
+          </main>
+
+          {panel !== "none" && (
+            <SidePanel
+              title={panelTitle}
+              icon={panel === "settings" ? "settings" : panel === "query" ? "search" : "tree"}
+              onClose={closePanel}
+              width={panelWidth}
+              onWidthChange={(w) => {
+                panelWidthManualRef.current = true;
+                setPanelWidth(w);
+              }}
+              headerExtra={
+                panel === "viewer" && !isDocEmpty ? (
+                  <div className="flex justify-end">
+                    <SegmentedControl
+                      value={view}
+                      onChange={(v) => setView(v as ViewMode)}
+                      options={viewsFor(fileKind)}
+                    />
+                  </div>
+                ) : null
+              }
+            >
+              {panelBody}
+            </SidePanel>
+          )}
+        </div>
+
+        {/* 底部搜索结果窗口 */}
+        <SearchResultsPanel />
       </div>
 
       {/* ============ 状态栏 ============ */}

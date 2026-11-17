@@ -3,6 +3,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod json_core;
+mod search;
 mod settings;
 mod sys;
 
@@ -299,6 +300,8 @@ fn main() {
             set_autostart,
             open_default_apps_settings,
             cleanup_system_integration,
+            search::search_in_folder,
+            search::replace_in_files,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -92,6 +92,12 @@ export class WindowHighlighter {
     return this.index.count;
   }
 
+  /** 某行的起始字符偏移（用于把命中区间映射到行内位置） */
+  lineStart(line: number): number {
+    const idx = Math.max(0, Math.min(line, this.index.count - 1));
+    return this.index.starts[idx];
+  }
+
   /** 字符偏移 → 行号（0 起）；二分查找 */
   lineOf(offset: number): number {
     const starts = this.index.starts;
