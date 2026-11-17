@@ -57,11 +57,21 @@ interface JsonState {
   /** 查找栏是否展开 */
   findOpen: boolean;
   /**
-   * 定位序号：仅在用户**显式**导航查找（下一个/上一个/改查询词）时递增，
+   * 定位序号：仅在用户**显式**导航查找（下一个/上一个）时递增，
    * 用于触发编辑器重新选中命中位置。文档编辑导致的重算不会递增，
    * 否则会在用户打字时反复把光标抢走。
    */
   findNonce: number;
+  /**
+   * 是否已显式导航过查找结果（下一个/上一个）。
+   * 未导航过时按回车应定位到第一处命中，而不是第二处。
+   */
+  findNavigated: boolean;
+  /**
+   * 关闭查找栏时的定位目标：把光标送回最后命中的位置并聚焦编辑区。
+   * 查找栏打开期间定位不抢输入焦点，关闭时再交还焦点。
+   */
+  findFocus: { start: number; end: number; nonce: number } | null;
 
   // actions
   setPanel: (p: PanelKind) => void;
@@ -235,6 +245,8 @@ export const useJsonStore = create<JsonState>((set, get) => ({
   findIndex: -1,
   findOpen: false,
   findNonce: 0,
+  findNavigated: false,
+  findFocus: null,
 
   setPanel: (p) => set({ panel: p }),
 
@@ -618,9 +630,25 @@ export const useJsonStore = create<JsonState>((set, get) => ({
     set({ searchHits: hits, statusMessage: `搜索命中 ${hits.length} 处` });
   },
 
-  openFind: () => set({ findOpen: true }),
+  openFind: () => set({ findOpen: true, findNavigated: false }),
 
-  closeFind: () => set({ findOpen: false, findQuery: "", findMatches: [], findIndex: -1 }),
+  // 关闭查找栏：记录最后命中的位置，关闭后把光标与焦点交还编辑区
+  closeFind: () =>
+    set((s) => {
+      const start = s.findIndex >= 0 ? s.findMatches[s.findIndex] : undefined;
+      const len = s.findQuery.length;
+      return {
+        findOpen: false,
+        findQuery: "",
+        findMatches: [],
+        findIndex: -1,
+        findNavigated: false,
+        findFocus:
+          start !== undefined && len > 0
+            ? { start, end: start + len, nonce: s.findNonce + 1 }
+            : null,
+      };
+    }),
 
   setFindQuery: (q) => {
     const s = get();
@@ -628,7 +656,7 @@ export const useJsonStore = create<JsonState>((set, get) => ({
     const text = tab?.text ?? "";
     // 大文档逐键扫描全文会明显卡顿：命中计算防抖，查询词本身立即生效
     if (text.length > FIND_DEBOUNCE_THRESHOLD) {
-      set({ findQuery: q });
+      set({ findQuery: q, findNavigated: false });
       scheduleFindScan(q, s.findCaseSensitive);
       return;
     }
@@ -637,7 +665,9 @@ export const useJsonStore = create<JsonState>((set, get) => ({
       findQuery: q,
       findMatches: matches,
       findIndex: matches.length ? 0 : -1,
-      findNonce: s.findNonce + 1,
+      // 打字过程中**不能**触发定位：否则编辑器会抢走焦点，
+      // 后续按键被插入到文档里（表现为输入的查找词跑进了正文）。
+      findNavigated: false,
       statusMessage: q ? `查找命中 ${matches.length} 处` : "",
     });
   },
@@ -672,7 +702,7 @@ export const useJsonStore = create<JsonState>((set, get) => ({
     const text = tab?.text ?? "";
     const caseSensitive = !s.findCaseSensitive;
     if (text.length > FIND_DEBOUNCE_THRESHOLD) {
-      set({ findCaseSensitive: caseSensitive });
+      set({ findCaseSensitive: caseSensitive, findNavigated: false });
       scheduleFindScan(s.findQuery, caseSensitive);
       return;
     }
@@ -681,17 +711,20 @@ export const useJsonStore = create<JsonState>((set, get) => ({
       findCaseSensitive: caseSensitive,
       findMatches: matches,
       findIndex: matches.length ? 0 : -1,
-      findNonce: s.findNonce + 1,
+      // 切换大小写同样不抢焦点（用户可能正在输入框里继续打字）
+      findNavigated: false,
     });
   },
 
   findNext: () => {
     const s = get();
     if (!s.findMatches.length) return;
-    const idx = s.findIndex < 0 ? 0 : (s.findIndex + 1) % s.findMatches.length;
+    // 未显式导航过时回到第一处命中，避免跳过首个命中
+    const idx = s.findNavigated ? (s.findIndex + 1) % s.findMatches.length : 0;
     set({
       findIndex: idx,
       findNonce: s.findNonce + 1,
+      findNavigated: true,
       statusMessage: `查找命中 ${s.findMatches.length} 处（第 ${idx + 1} 处）`,
     });
   },
@@ -699,10 +732,13 @@ export const useJsonStore = create<JsonState>((set, get) => ({
   findPrev: () => {
     const s = get();
     if (!s.findMatches.length) return;
-    const idx = s.findIndex <= 0 ? s.findMatches.length - 1 : s.findIndex - 1;
+    const idx = s.findNavigated
+      ? (s.findIndex - 1 + s.findMatches.length) % s.findMatches.length
+      : s.findMatches.length - 1;
     set({
       findIndex: idx,
       findNonce: s.findNonce + 1,
+      findNavigated: true,
       statusMessage: `查找命中 ${s.findMatches.length} 处（第 ${idx + 1} 处）`,
     });
   },
@@ -805,7 +841,8 @@ function scheduleFindScan(query: string, caseSensitive: boolean): void {
     useJsonStore.setState({
       findMatches: matches,
       findIndex: matches.length ? 0 : -1,
-      findNonce: s.findNonce + 1,
+      // 防抖扫描同样不触发定位：否则用户还在输入时编辑器会抢走焦点
+      findNavigated: false,
       statusMessage: query ? `查找命中 ${matches.length} 处` : "",
     });
   }, FIND_DEBOUNCE_MS);

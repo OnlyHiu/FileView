@@ -33,9 +33,24 @@ export const SourceEditor: React.FC<{
   readOnly?: boolean;
   /** 外部请求定位并选中一段文本（查找跳转） */
   reveal?: RevealTarget | null;
+  /**
+   * 定位时是否把焦点移入编辑区。
+   * 查找栏打开期间为 false：否则定位会抢走查找输入框的焦点，
+   * 用户继续输入的字符会被插进文档正文。
+   */
+  focusOnReveal?: boolean;
   /** 文档为空时自动聚焦，便于直接粘贴内容 */
   autoFocus?: boolean;
-}> = ({ text, lang, onChange, errorLines, readOnly = false, reveal = null, autoFocus = false }) => {
+}> = ({
+  text,
+  lang,
+  onChange,
+  errorLines,
+  readOnly = false,
+  reveal = null,
+  focusOnReveal = true,
+  autoFocus = false,
+}) => {
   const fontSize = useSettingsStore((s) => s.settings.fontSize);
   const indent = useSettingsStore((s) => s.settings.indent);
   /** 行高（像素）：与 CSS 变量 --json-line-height 保持一致 */
@@ -122,7 +137,8 @@ export const SourceEditor: React.FC<{
     const ta = textareaRef.current;
     if (!ta) return;
     try {
-      ta.focus({ preventScroll: true });
+      // 查找栏打开时不抢焦点：查找输入框必须保持焦点，否则继续输入会写进正文
+      if (focusOnReveal) ta.focus({ preventScroll: true });
       ta.setSelectionRange(reveal.start, reveal.end);
       const lineIndex = highlighter.lineOf(reveal.start);
       const top = Math.max(0, lineIndex * lineHeightPx - ta.clientHeight / 3);

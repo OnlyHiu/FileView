@@ -120,6 +120,7 @@ export default function App() {
   const findMatches = useJsonStore((s) => s.findMatches);
   const findIndex = useJsonStore((s) => s.findIndex);
   const findNonce = useJsonStore((s) => s.findNonce);
+  const findFocus = useJsonStore((s) => s.findFocus);
   const findNext = useJsonStore((s) => s.findNext);
 
   const settings = useSettingsStore((s) => s.settings);
@@ -640,16 +641,17 @@ export default function App() {
     return map;
   }, [result, fileKind]);
 
-  // 查找定位：由 store 的 findNonce 驱动，仅在用户显式导航查找时重新定位，
-  // 避免编辑文档时把光标抢走。
-  const revealTarget =
-    findOpen && findIndex >= 0 && findMatches[findIndex] !== undefined
+  // 查找定位：由 store 的 findNonce 驱动，仅在用户显式导航查找（下一个/上一个）时重新定位，
+  // 避免编辑文档时把光标抢走；查找栏关闭后按 findFocus 定位并把焦点交还编辑区。
+  const revealTarget = findOpen
+    ? findIndex >= 0 && findMatches[findIndex] !== undefined
       ? {
           start: findMatches[findIndex],
           end: findMatches[findIndex] + findQuery.length,
           nonce: findNonce,
         }
-      : null;
+      : null
+    : findFocus;
 
   const isJson = fileKind === "json";
   // 眼睛按钮：打开查看工具面板并切到该文件大类的默认视图
@@ -894,6 +896,7 @@ export default function App() {
               onChange={setEditorText}
               errorLines={errorLines}
               reveal={revealTarget}
+              focusOnReveal={!findOpen}
               autoFocus={isDocEmpty}
             />
           ) : (
