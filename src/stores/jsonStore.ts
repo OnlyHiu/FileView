@@ -218,6 +218,17 @@ function autoPreviewFor(tab: Tab | undefined): { view: ViewMode; panel: PanelKin
   return null;
 }
 
+/**
+ * 空白文档不挂查看工具面板。
+ *
+ * 典型场景：把已开启预览的文件「分离为独立窗口」后，主窗口只剩默认的空白页，
+ * 此时不应继续挂着上一个文档的预览窗口。
+ */
+function panelForDoc(s: JsonState, tab: Tab | undefined): { panel?: PanelKind } {
+  const empty = !tab || (!tab.path && tab.text.trim() === "");
+  return empty && s.panel === "viewer" ? { panel: "none" } : {};
+}
+
 /** 标签页是否有未保存的更改 */
 export function isTabDirty(t: Tab): boolean {
   if (t.path) return diskBaselines.get(t.path) !== t.text;
@@ -281,6 +292,7 @@ export const useJsonStore = create<JsonState>((set, get) => ({
       result: null,
       expanded: {},
       ...docStateFor(t, s.view),
+      ...panelForDoc(s, t),
     }));
     void get().reparse();
   },
@@ -294,6 +306,7 @@ export const useJsonStore = create<JsonState>((set, get) => ({
       // 关闭的是当前标签：解析结果/折叠/选中/命中都属于被关闭的文档，必须一并清空，
       // 否则新标签会短暂显示旧文档的 JSON 错误行
       const closedActive = s.activeTabId === id;
+      const nextActive = tabs.find((t) => t.id === activeTabId);
       return {
         tabs,
         activeTabId,
@@ -301,7 +314,8 @@ export const useJsonStore = create<JsonState>((set, get) => ({
         expanded: closedActive ? {} : s.expanded,
         searchHits: closedActive ? [] : s.searchHits,
         selectedId: closedActive ? null : s.selectedId,
-        ...docStateFor(tabs.find((t) => t.id === activeTabId), s.view),
+        ...docStateFor(nextActive, s.view),
+        ...panelForDoc(s, nextActive),
       };
     });
     // 释放该标签的撤销历史，避免长期运行时无界增长
@@ -319,6 +333,7 @@ export const useJsonStore = create<JsonState>((set, get) => ({
       searchHits: [],
       result: null,
       ...docStateFor(s.tabs.find((t) => t.id === id), s.view),
+      ...panelForDoc(s, s.tabs.find((t) => t.id === id)),
     }));
     // 命中偏移是相对文本的：换文档后必须重算
     get().syncFind();
