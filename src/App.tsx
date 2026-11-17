@@ -5,7 +5,7 @@ import { useJsonStore } from "./stores/jsonStore";
 import { useSettingsStore } from "./stores/settingsStore";
 import { Icon, SegmentedControl, Tooltip, Dialog } from "./components/ui";
 import { MenuBar } from "./components/MenuBar";
-import { SidePanel } from "./components/SidePanel";
+import { SidePanel, PANEL_MIN_WIDTH } from "./components/SidePanel";
 import { TreeView } from "./features/TreeView";
 import { TableView } from "./features/TableView";
 import { RawView } from "./features/RawView";
@@ -29,12 +29,13 @@ import {
   takeStartupFile,
   detachTabToWindow,
 } from "./lib/api";
-import { getDiskBaseline, isTabDirty } from "./stores/jsonStore";
+import { getDiskBaseline, isTabDirty, type PanelKind } from "./stores/jsonStore";
 import {
   viewsFor,
   defaultViewFor,
   kindLabel,
   langFromPath,
+  resolveView,
   type ParseMode,
   type Tab,
   type ViewMode,
@@ -44,6 +45,44 @@ import {
 let detachPayloadHandled = false;
 
 const APP_VERSION = "0.2.1";
+
+/** 会话快照键：webview 刷新（如右键菜单「刷新」）后据此恢复已打开的文件 */
+const SESSION_KEY = "fileview.session.v1";
+
+interface SessionSnapshot {
+  /** 已打开文件的路径（按打开顺序） */
+  paths: string[];
+  /** 刷新前处于活动状态的标签路径 */
+  activePath: string | null;
+  /** 刷新前的右侧面板状态 */
+  panel: PanelKind;
+  /** 刷新前的视图 */
+  view: ViewMode;
+}
+
+/** 读取会话快照；无有效快照返回 null */
+function readSessionSnapshot(): SessionSnapshot | null {
+  try {
+    const raw = sessionStorage.getItem(SESSION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<SessionSnapshot>;
+    if (!Array.isArray(parsed.paths) || parsed.paths.length === 0) return null;
+    return {
+      paths: parsed.paths.filter((p): p is string => typeof p === "string"),
+      activePath: typeof parsed.activePath === "string" ? parsed.activePath : null,
+      panel: (parsed.panel ?? "none") as PanelKind,
+      view: (parsed.view ?? "tree") as ViewMode,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** 面板默认宽度：占窗口一半 */
+function defaultPanelWidth(): number {
+  const max = Math.max(PANEL_MIN_WIDTH, Math.round(window.innerWidth * 0.72));
+  return Math.max(PANEL_MIN_WIDTH, Math.min(max, Math.round(window.innerWidth / 2)));
+}
 
 export default function App() {
   const panel = useJsonStore((s) => s.panel);
@@ -88,7 +127,38 @@ export default function App() {
 
   const [theme, setTheme] = useState<"light" | "dark">("light");
   const [aboutOpen, setAboutOpen] = useState(false);
-  const [panelWidth, setPanelWidth] = useState(460);
+  const [panelWidth, setPanelWidth] = useState(defaultPanelWidth);
+  /** 用户手动拖拽过面板后不再跟随窗口宽度变化 */
+  const panelWidthManualRef = useRef(false);
+  /** 刷新前的会话快照（首次渲染时同步读取，避免被持久化副作用覆盖） */
+  const sessionRef = useRef<SessionSnapshot | null | undefined>(undefined);
+  if (sessionRef.current === undefined) sessionRef.current = readSessionSnapshot();
+
+  // 面板宽度默认占窗口一半：窗口尺寸变化时同步跟随（用户手动调整过则保持不变）
+  useEffect(() => {
+    const onResize = () => {
+      if (panelWidthManualRef.current) return;
+      setPanelWidth(defaultPanelWidth());
+    };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  // 会话快照：记录已打开的文件与面板状态，供刷新后恢复
+  useEffect(() => {
+    const paths = tabs.map((t) => t.path).filter((p): p is string => !!p);
+    const activePath = tabs.find((t) => t.id === activeTabId)?.path ?? null;
+    try {
+      if (paths.length === 0) {
+        sessionStorage.removeItem(SESSION_KEY);
+        return;
+      }
+      const snapshot: SessionSnapshot = { paths, activePath, panel, view };
+      sessionStorage.setItem(SESSION_KEY, JSON.stringify(snapshot));
+    } catch {
+      // 存储不可用或超出配额：忽略，不影响正常编辑
+    }
+  }, [tabs, activeTabId, panel, view]);
 
   // ============ 启动：主题 → 载入文档 → 显示窗口（避免启动白闪） ============
   const revealedRef = useRef(false);
@@ -190,26 +260,55 @@ export default function App() {
                 .getState()
                 .setStatus(`文件超过 64MB，仅加载了前面部分，统计与视图不完整`);
             }
-          } else if (s.startup !== "blank") {
-            // 启动行为：按设置恢复上次会话 / 最近文件
-            // last 严格恢复上次打开的文件；recent 依次尝试最近列表中仍可用的文件
-            const candidates = s.startup === "last" ? s.recentFiles.slice(0, 1) : s.recentFiles;
-            let restored = false;
-            for (const path of candidates) {
-              try {
-                const payload = await readFileText(path);
-                loadFile(payload.path, payload.text);
-                useJsonStore
-                  .getState()
-                  .setStatus(`已恢复${s.startup === "last" ? "上次会话" : "最近"}的文件: ${path}`);
-                restored = true;
-                break;
-              } catch {
-                // 文件已不可用，尝试下一个
+          } else {
+            // 刷新恢复：webview 刷新（右键菜单「刷新」）后按会话快照恢复已打开的文件，
+            // 避免刷新后文档区空白、文件看似被关闭
+            const snapshot = sessionRef.current;
+            let sessionRestored = false;
+            if (snapshot) {
+              for (const path of snapshot.paths) {
+                try {
+                  const payload = await readFileText(path);
+                  loadFile(payload.path, payload.text);
+                  sessionRestored = true;
+                } catch {
+                  // 文件已不可用：跳过，继续恢复其余文件
+                }
+              }
+              if (sessionRestored) {
+                const st = useJsonStore.getState();
+                if (snapshot.activePath) {
+                  const target = st.tabs.find((t) => t.path === snapshot.activePath);
+                  if (target) st.switchTab(target.id);
+                }
+                // 面板与视图以刷新前的状态为准（用户主动收起预览则保持收起）
+                st.setPanel(snapshot.panel);
+                st.setView(resolveView(snapshot.view, st.fileKind));
+                st.setStatus("已恢复刷新前打开的文件");
               }
             }
-            if (!restored && candidates.length > 0) {
-              useJsonStore.getState().setStatus("启动恢复失败：最近的文件已不可用");
+            if (!sessionRestored && s.startup !== "blank") {
+              // 启动行为：按设置恢复上次会话 / 最近文件
+              // last 严格恢复上次打开的文件；recent 依次尝试最近列表中仍可用的文件
+              const candidates =
+                s.startup === "last" ? s.recentFiles.slice(0, 1) : s.recentFiles;
+              let restored = false;
+              for (const path of candidates) {
+                try {
+                  const payload = await readFileText(path);
+                  loadFile(payload.path, payload.text);
+                  useJsonStore
+                    .getState()
+                    .setStatus(`已恢复${s.startup === "last" ? "上次会话" : "最近"}的文件: ${path}`);
+                  restored = true;
+                  break;
+                } catch {
+                  // 文件已不可用，尝试下一个
+                }
+              }
+              if (!restored && candidates.length > 0) {
+                useJsonStore.getState().setStatus("启动恢复失败：最近的文件已不可用");
+              }
             }
           }
         }
@@ -815,7 +914,10 @@ export default function App() {
             icon={panel === "settings" ? "settings" : panel === "query" ? "search" : "tree"}
             onClose={closePanel}
             width={panelWidth}
-            onWidthChange={setPanelWidth}
+            onWidthChange={(w) => {
+              panelWidthManualRef.current = true;
+              setPanelWidth(w);
+            }}
             headerExtra={
               panel === "viewer" && !isDocEmpty ? (
                 <div className="flex justify-end">
