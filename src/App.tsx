@@ -552,6 +552,17 @@ export default function App() {
       : null;
 
   const isJson = fileKind === "json";
+  const canPreview = viewsFor(fileKind).some((v) => v.value === "preview");
+  const previewActive = panel === "viewer" && view === "preview";
+
+  const togglePreview = () => {
+    if (previewActive) {
+      setPanel("none");
+      return;
+    }
+    setView("preview");
+    setPanel("viewer");
+  };
 
   // 面板内容
   const panelBody = (() => {
@@ -714,6 +725,13 @@ export default function App() {
           title="查看工具 (Ctrl+B)"
           onClick={() => togglePanel("viewer")}
           active={panel === "viewer"}
+        />
+        <ToolButton
+          icon="eye"
+          title={canPreview ? "预览 (再次点击关闭)" : "当前文件不支持预览"}
+          onClick={togglePreview}
+          active={previewActive}
+          disabled={!canPreview}
         />
         <ToolButton
           icon="external"

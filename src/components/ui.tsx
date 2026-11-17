@@ -32,6 +32,7 @@ const ICON_PATHS: Record<string, string> = {
   external: "M14 4h6v6M20 4l-8 8M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5",
   info: "M12 3a9 9 0 1 1 0 18 9 9 0 0 1 0-18zm0 4v5m0 4h.01",
   warning: "M12 3l10 18H2zM12 9v5m0 3h.01",
+  eye: "M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z",
   undo: "M9 7H5V3M5.5 7a8 8 0 1 1-1 9",
   redo: "M15 7h4V3M18.5 7a8 8 0 1 0 1 9",
 };
