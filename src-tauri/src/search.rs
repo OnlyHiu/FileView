@@ -46,11 +46,15 @@ pub struct SearchHit {
     pub path: String,
     /// 行号（1 起）
     pub line: u32,
-    /// 列号（1 起）
+    /// 列号（1 起，按 UTF-16 码元计）
     pub column: u32,
-    /// 命中起始字符偏移（整个文件，按字符计）
+    /// 命中起始偏移（整个文件，按 **UTF-16 码元**计）
+    ///
+    /// 前端用该偏移直接调用 `textarea.setSelectionRange`，
+    /// 而 JS 字符串下标按 UTF-16 码元计——必须与前端口径一致，
+    /// 否则文件里每出现一个星平面字符（emoji 等）定位就偏一个字符。
     pub offset: u64,
-    /// 命中长度（字符）
+    /// 命中长度（UTF-16 码元）
     pub length: u64,
     /// 命中所在整行文本
     pub text: String,
@@ -75,6 +79,11 @@ pub struct ReplaceResult {
     pub changed_files: usize,
     /// 替换的命中总数
     pub replaced: usize,
+    /// 改写失败的文件（被占用 / 只读 / 无权限）
+    ///
+    /// 之前写失败被静默忽略，界面却报告「已替换 N 处」——
+    /// 用户以为改成功了，文件其实没动。
+    pub failed_files: Vec<String>,
 }
 
 /// 是否为单词字符（整词匹配判定）
@@ -82,15 +91,22 @@ fn is_word_char(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
 }
 
-/// 折叠大小写后的字符序列：元素为 (折叠后的字符, 在原字符串中的字节偏移)
-fn fold_chars(s: &str, case_sensitive: bool) -> Vec<(char, usize)> {
+/// 折叠大小写后的字符序列。
+///
+/// 元素为 (折叠后的字符, 该字符在原字符串中的字节起止)。
+///
+/// 注意：`char::to_lowercase` **不是** 1:1 的（如 'İ' U+0130 → 'i' + U+0307 两个字符），
+/// 因此必须把「折叠出的字符」都指向**同一个原字符的字节区间**，
+/// 否则命中区间会被算成空区间，替换时只插入不删除 → 文件内容被写坏。
+fn fold_chars(s: &str, case_sensitive: bool) -> Vec<(char, usize, usize)> {
     let mut out = Vec::new();
     for (byte, ch) in s.char_indices() {
+        let end = byte + ch.len_utf8();
         if case_sensitive {
-            out.push((ch, byte));
+            out.push((ch, byte, end));
         } else {
             for c in ch.to_lowercase() {
-                out.push((c, byte));
+                out.push((c, byte, end));
             }
         }
     }
@@ -119,8 +135,9 @@ fn match_ranges(line: &str, query: &str, case_sensitive: bool) -> Vec<(usize, us
             }
         }
         if ok {
+            // 起点取第一个原字符的字节起点，终点取最后一个原字符的字节终点
             let start = hay[i].1;
-            let end = if i + n < hay.len() { hay[i + n].1 } else { line.len() };
+            let end = hay[i + n - 1].2;
             out.push((start, end.max(start)));
             i += n;
         } else {
@@ -137,7 +154,7 @@ fn whole_word_ok(line: &str, start: usize, end: usize) -> bool {
     !before.map(is_word_char).unwrap_or(false) && !after.map(is_word_char).unwrap_or(false)
 }
 
-/// 在文本中查找命中（按行扫描，返回字符偏移与行列）
+/// 在文本中查找命中（按行扫描，返回 UTF-16 偏移与行列）
 fn search_text(
     text: &str,
     query: &str,
@@ -146,20 +163,21 @@ fn search_text(
     hits: &mut Vec<SearchHit>,
     path: &str,
 ) {
-    let mut line_char_start = 0usize;
+    let mut line_utf16_start = 0usize;
     for (i, line) in text.split('\n').enumerate() {
         let ranges = match_ranges(line, query, case_sensitive);
         for (start, end) in ranges {
             if whole_word && !whole_word_ok(line, start, end) {
                 continue;
             }
-            let column = line[..start].chars().count();
-            let length = line[start..end].chars().count();
+            // 偏移口径与前端一致：UTF-16 码元
+            let column = line[..start].encode_utf16().count();
+            let length = line[start..end].encode_utf16().count();
             hits.push(SearchHit {
                 path: path.to_string(),
                 line: (i + 1) as u32,
                 column: (column + 1) as u32,
-                offset: (line_char_start + column) as u64,
+                offset: (line_utf16_start + column) as u64,
                 length: length as u64,
                 text: line.trim_end_matches('\r').to_string(),
             });
@@ -167,7 +185,7 @@ fn search_text(
                 return;
             }
         }
-        line_char_start += line.chars().count() + 1; // +1：换行符
+        line_utf16_start += line.encode_utf16().count() + 1; // +1：换行符
     }
 }
 
@@ -310,15 +328,24 @@ pub fn replace_in_files(
     for p in paths {
         let path = PathBuf::from(&p);
         let Some(text) = read_searchable(&path) else {
+            // 跳过（二进制 / 过大 / 非 UTF-8）：也要让用户知道
+            result.failed_files.push(format!("{p}（已跳过：不是可搜索的文本文件）"));
             continue;
         };
         let (new_text, count) = replace_in_text(&text, &query, &replacement, case_sensitive);
         if count == 0 {
             continue;
         }
-        if fs::write(&path, new_text.as_bytes()).is_ok() {
-            result.changed_files += 1;
-            result.replaced += count;
+        match fs::write(&path, new_text.as_bytes()) {
+            Ok(()) => {
+                result.changed_files += 1;
+                result.replaced += count;
+            }
+            Err(e) => {
+                // 写失败（被占用 / 只读 / 无权限）必须如实报告：
+                // 之前被静默忽略，界面却显示「已替换 N 处」
+                result.failed_files.push(format!("{p}（{e}）"));
+            }
         }
     }
     Ok(result)
@@ -400,5 +427,48 @@ mod tests {
         assert_eq!(text, "HI\nworld HI\n");
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn lowercase_expanding_char_does_not_produce_empty_range() {
+        // 'İ' (U+0130) 小写后是 'i' + U+0307 两个字符。
+        // 折叠时若都指向同一字节偏移，命中区间会算成空区间，
+        // 替换时只插入不删除 → 文件内容被写坏。
+        let ranges = match_ranges("İzz", "i", false);
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0], (0, 2), "命中区间必须覆盖整个原字符");
+        let (out, count) = replace_in_text("İzz", "i", "X", false);
+        assert_eq!(count, 1);
+        assert_eq!(out, "Xzz", "原字符必须被真正替换掉");
+    }
+
+    #[test]
+    fn offsets_are_utf16_code_units() {
+        // emoji 是星平面字符：UTF-16 占 2 个码元
+        let text = "😀 hello world";
+        let mut hits = Vec::new();
+        search_text(text, "world", false, false, &mut hits, "a.txt");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].offset, 9, "偏移必须按 UTF-16 码元计");
+        assert_eq!(hits[0].length, 5);
+        // 用 UTF-16 偏移切 JS 风格的字符串应正好命中
+        let utf16: Vec<u16> = text.encode_utf16().collect();
+        let got = String::from_utf16(&utf16[9..14]).unwrap();
+        assert_eq!(got, "world");
+    }
+
+    #[test]
+    fn failed_writes_are_reported() {
+        // 目标是不存在的目录：写入必然失败，必须如实报告
+        let res = replace_in_files(
+            vec!["Z:\\definitely\\not\\exists\\a.txt".to_string()],
+            "x".into(),
+            "y".into(),
+            true,
+        )
+        .unwrap();
+        assert_eq!(res.changed_files, 0);
+        assert_eq!(res.replaced, 0);
+        assert_eq!(res.failed_files.len(), 1, "写失败必须上报，不能静默吞掉");
     }
 }

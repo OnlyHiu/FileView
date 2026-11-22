@@ -15,11 +15,25 @@ const ROW_HEIGHT = 22;
 /** 结果条目：当前文档命中与跨文件命中统一成同一种结构 */
 interface ResultEntry {
   path: string;
+  /** 是否来自当前文档（未保存文档的 path 为 null，用标签名做标识） */
+  current: boolean;
   line: number;
   column: number;
   offset: number;
   length: number;
   text: string;
+}
+
+/** 二分查找：偏移所在的行号（行号从 1 起） */
+function lineOfOffset(lineStarts: number[], offset: number): number {
+  let lo = 0;
+  let hi = lineStarts.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (lineStarts[mid] <= offset) lo = mid;
+    else hi = mid - 1;
+  }
+  return lo + 1;
 }
 
 export const SearchResultsPanel: React.FC = () => {
@@ -47,31 +61,45 @@ export const SearchResultsPanel: React.FC = () => {
   const setResultsHeight = useSearchStore((s) => s.setResultsHeight);
 
   const activeTab = tabs.find((t) => t.id === activeTabId);
-  const activePath = activeTab?.path ?? null;
+  /** 当前文档标识：有磁盘路径用路径，未保存文档用标签名（两者都不能为空） */
+  const activePath = activeTab ? (activeTab.path ?? activeTab.name) : null;
+
+  /** 行首偏移表：命中数多时避免逐个匹配做 O(n) 切片（会卡住界面） */
+  const lineStarts = useMemo(() => {
+    const text = activeTab?.text ?? "";
+    const arr = [0];
+    for (let i = 0; i < text.length; i++) {
+      if (text.charCodeAt(i) === 10) arr.push(i + 1);
+    }
+    return arr;
+  }, [activeTab?.text]);
 
   // 当前文档的命中
   const docEntries = useMemo<ResultEntry[]>(() => {
     if (!activeTab || !findQuery || findMatches.length === 0) return [];
     const text = activeTab.text;
     return findMatches.map((offset) => {
-      const lineStart = text.lastIndexOf("\n", Math.max(0, offset - 1)) + 1;
-      const lineEnd = text.indexOf("\n", offset);
+      const lineNo = lineOfOffset(lineStarts, offset);
+      const lineStart = lineStarts[lineNo - 1];
+      const lineEnd = lineNo < lineStarts.length ? lineStarts[lineNo] : text.length;
       return {
         path: activeTab.path ?? activeTab.name,
-        line: text.slice(0, offset).split("\n").length,
+        current: true,
+        line: lineNo,
         column: offset - lineStart + 1,
         offset,
         length: findQuery.length,
-        text: text.slice(lineStart, lineEnd === -1 ? text.length : lineEnd).trimEnd(),
+        text: text.slice(lineStart, lineEnd).trimEnd(),
       };
     });
-  }, [activeTab, findQuery, findMatches]);
+  }, [activeTab, findQuery, findMatches, lineStarts]);
 
   // 文件夹搜索的命中
   const folderEntries = useMemo<ResultEntry[]>(
     () =>
       folderHits.map((h: SearchHit) => ({
         path: h.path,
+        current: false,
         line: h.line,
         column: h.column,
         offset: h.offset,
@@ -104,8 +132,8 @@ export const SearchResultsPanel: React.FC = () => {
   /** 跳转到命中位置：跨文件时先打开文件 */
   const goto = useCallback(
     async (e: ResultEntry) => {
-      // 跨文件：打开文件后再定位
-      if (e.path !== activePath) {
+      // 跨文件：打开文件后再定位（当前文档的命中直接定位，不做任何 IO）
+      if (!e.current) {
         try {
           const payload = await readFileText(e.path);
           useJsonStore.getState().loadFile(payload.path, payload.text);
@@ -115,11 +143,11 @@ export const SearchResultsPanel: React.FC = () => {
         }
       }
       // 用对应的搜索词在新文档里继续高亮（跨文件命中用文件夹搜索的词）
-      const query = e.path === activePath ? findQuery : folderQuery || findQuery;
+      const query = e.current ? findQuery : folderQuery || findQuery;
       if (query) setFindQuery(query);
       revealAt(e.path, e.offset, e.length);
     },
-    [activePath, findQuery, folderQuery, revealAt, setFindQuery, setStatus]
+    [findQuery, folderQuery, revealAt, setFindQuery, setStatus]
   );
 
   // 面板高度拖拽
@@ -136,9 +164,12 @@ export const SearchResultsPanel: React.FC = () => {
         draggingRef.current = false;
         window.removeEventListener("pointermove", move);
         window.removeEventListener("pointerup", up);
+        // 指针在窗口外松开 / 触摸被取消时同样要清理，否则监听器会一直留着
+        window.removeEventListener("pointercancel", up);
       };
       window.addEventListener("pointermove", move);
       window.addEventListener("pointerup", up);
+      window.addEventListener("pointercancel", up);
     },
     [setResultsHeight]
   );
@@ -175,7 +206,7 @@ export const SearchResultsPanel: React.FC = () => {
         <div className="flex-1" />
         <button
           onClick={() => void searchFolder()}
-          title="在文件夹中搜索 (Ctrl+Shift+F)"
+          title="在文件夹中搜索 (Ctrl+Alt+F)"
           className="h-6 px-2 rounded-sm text-[11px] text-ink-secondary hover:bg-smoke-bg-card-hover shrink-0"
         >
           在文件夹中搜索
@@ -211,11 +242,9 @@ export const SearchResultsPanel: React.FC = () => {
           <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
             {virtualizer.getVirtualItems().map((vi) => {
               const e = entries[vi.index];
-              const isCurrent = e.path === activePath;
+              const isCurrent = e.current;
               const isActive =
-                isCurrent &&
-                findMatches[findIndex] === e.offset &&
-                docEntries.some((d) => d.offset === e.offset);
+                isCurrent && findMatches[findIndex] === e.offset;
               return (
                 <div
                   key={`${e.path}:${e.offset}:${vi.index}`}

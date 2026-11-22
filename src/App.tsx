@@ -46,7 +46,7 @@ import {
 /** 分离窗口只应消费一次负载（React StrictMode 下 effect 会执行两次） */
 let detachPayloadHandled = false;
 
-const APP_VERSION = "0.2.1";
+const APP_VERSION = "0.2.2";
 
 /** 会话快照键：webview 刷新（如右键菜单「刷新」）后据此恢复已打开的文件 */
 const SESSION_KEY = "fileview.session.v1";
@@ -123,6 +123,7 @@ export default function App() {
   const findIndex = useJsonStore((s) => s.findIndex);
   const findNonce = useJsonStore((s) => s.findNonce);
   const findFocus = useJsonStore((s) => s.findFocus);
+  const findNavigated = useJsonStore((s) => s.findNavigated);
   const findNext = useJsonStore((s) => s.findNext);
   const docReveal = useJsonStore((s) => s.docReveal);
   const toggleReplace = useJsonStore((s) => s.toggleReplace);
@@ -690,21 +691,34 @@ export default function App() {
   // 查找定位：由 store 的 findNonce 驱动，仅在用户显式导航查找（下一个/上一个）时重新定位，
   // 避免编辑文档时把光标抢走；查找栏关闭后按 findFocus 定位并把焦点交还编辑区；
   // 搜索结果面板点击命中时按 docReveal 定位。
-  const revealTarget = docReveal && docReveal.path === activeTab?.path
+  //
+  // 文档标识：有磁盘路径用路径，未保存文档用标签名（两者都不会为空），
+  // 否则搜索结果面板的定位请求会被当成「别的文档」而丢弃。
+  const activeDocKey = activeTab?.path ?? activeTab?.name ?? null;
+
+  /** 当前命中对应的定位区间（查找栏开合都用它） */
+  const findReveal =
+    findQuery && findIndex >= 0 && findMatches[findIndex] !== undefined
+      ? {
+          start: findMatches[findIndex],
+          end: findMatches[findIndex] + findQuery.length,
+          nonce: findNonce,
+        }
+      : null;
+
+  const revealTarget = docReveal && docReveal.path === activeDocKey
     ? {
         start: docReveal.offset,
         end: docReveal.offset + docReveal.length,
         nonce: docReveal.nonce,
       }
     : findOpen
-      ? findIndex >= 0 && findMatches[findIndex] !== undefined
-        ? {
-            start: findMatches[findIndex],
-            end: findMatches[findIndex] + findQuery.length,
-            nonce: findNonce,
-          }
-        : null
-      : findFocus;
+      ? findReveal
+      : // 查找栏关闭：未导航过时用关闭瞬间的定位（把焦点交还编辑区），
+        // 已导航过时用当前命中——这样 F3 在查找栏关闭时依然能逐处跳转。
+        findNavigated
+        ? findReveal
+        : findFocus;
 
   // 命中高亮：把命中偏移转成区间交给编辑器着色
   const highlightRanges = useMemo(

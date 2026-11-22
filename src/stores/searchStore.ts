@@ -10,7 +10,7 @@ const REPLACE_HISTORY_KEY = "fileview.replace.history";
 /** 历史保留条数 */
 const MAX_HISTORY = 30;
 /** 底部结果面板默认高度 */
-export const RESULTS_PANEL_HEIGHT = 220;
+const RESULTS_PANEL_HEIGHT = 220;
 
 function loadHistory(key: string): string[] {
   try {
@@ -46,12 +46,13 @@ interface SearchState {
   replaceHistory: string[];
   pushFindHistory: (q: string) => void;
   pushReplaceHistory: (q: string) => void;
-  clearFindHistory: () => void;
 
   /** 文件夹搜索的根目录 */
   folderRoot: string | null;
   /** 文件夹搜索使用的查询词 */
   folderQuery: string;
+  /** 文件夹搜索时使用的大小写敏感设置（替换时必须沿用，不能取当前查找栏的） */
+  folderCaseSensitive: boolean;
   /** 是否正在扫描 */
   folderSearching: boolean;
   /** 命中的文件列表 */
@@ -95,13 +96,9 @@ export const useSearchStore = create<SearchState>((set, get) => ({
     set({ replaceHistory: next });
   },
 
-  clearFindHistory: () => {
-    saveHistory(FIND_HISTORY_KEY, []);
-    set({ findHistory: [] });
-  },
-
   folderRoot: null,
   folderQuery: "",
+  folderCaseSensitive: false,
   folderSearching: false,
   folderHits: [],
   folderScanned: 0,
@@ -121,6 +118,7 @@ export const useSearchStore = create<SearchState>((set, get) => ({
     set({
       folderRoot: target,
       folderQuery: findQuery,
+      folderCaseSensitive: findCaseSensitive,
       folderSearching: true,
       folderError: null,
       folderHits: [],
@@ -149,6 +147,7 @@ export const useSearchStore = create<SearchState>((set, get) => ({
     set({
       folderRoot: null,
       folderQuery: "",
+      folderCaseSensitive: false,
       folderHits: [],
       folderScanned: 0,
       folderSkipped: 0,
@@ -157,18 +156,43 @@ export const useSearchStore = create<SearchState>((set, get) => ({
     }),
 
   replaceInSearchedFiles: async (replacement) => {
-    const { folderHits, folderQuery } = get();
+    const { folderHits, folderQuery, folderCaseSensitive, folderRoot } = get();
     if (!folderQuery) return 0;
     const paths = [...new Set(folderHits.map((h) => h.path))];
     if (!paths.length) return 0;
-    const { findCaseSensitive } = useJsonStore.getState();
-    const result = await replaceInFiles(paths, folderQuery, replacement, findCaseSensitive);
-    useJsonStore
-      .getState()
-      .setStatus(`已替换 ${result.replaced} 处（${result.changed_files} 个文件）`);
-    // 重新扫描，结果面板刷新
-    if (get().folderRoot) await get().searchFolder(get().folderRoot ?? undefined);
-    return result.replaced;
+    try {
+      // 必须沿用**搜索时**的大小写敏感设置与查询词：
+      // 取当前查找栏的值会替换掉列表里没显示的其它大小写变体。
+      const result = await replaceInFiles(paths, folderQuery, replacement, folderCaseSensitive);
+      const failed = result.failed_files ?? [];
+      if (failed.length) {
+        useJsonStore
+          .getState()
+          .setStatus(
+            `已替换 ${result.replaced} 处（${result.changed_files} 个文件），但 ${failed.length} 个文件写入失败`
+          );
+        set({ folderError: `以下文件写入失败：${failed.join("；")}` });
+      } else {
+        useJsonStore
+          .getState()
+          .setStatus(`已替换 ${result.replaced} 处（${result.changed_files} 个文件）`);
+      }
+      // 重新扫描，结果面板刷新（用同一个查询词，不要读当前查找栏的）
+      if (folderRoot) {
+        const hits = await searchInFolder(folderRoot, folderQuery, folderCaseSensitive, false);
+        set({
+          folderHits: hits.hits,
+          folderScanned: hits.scanned_files,
+          folderSkipped: hits.skipped_files,
+          folderTruncated: hits.truncated,
+        });
+      }
+      return result.replaced;
+    } catch (e) {
+      set({ folderError: String(e) });
+      useJsonStore.getState().setStatus(`批量替换失败：${e}`);
+      return 0;
+    }
   },
 
   resultsOpen: false,

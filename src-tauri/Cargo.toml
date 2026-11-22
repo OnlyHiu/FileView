@@ -1,6 +1,6 @@
 [package]
 name = "fileview"
-version = "0.2.1"
+version = "0.2.2"
 description = "Windows 11 style multi-format file viewer & editor (Notepad++ like)"
 authors = ["FileView Team"]
 edition = "2021"

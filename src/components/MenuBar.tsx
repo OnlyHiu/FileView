@@ -67,68 +67,80 @@ export interface MenuBarProps {
 export const MenuBar: React.FC<MenuBarProps> = (p) => {
   const [openIndex, setOpenIndex] = useState<number | null>(null);
   const barRef = useRef<HTMLDivElement>(null);
+  /**
+   * 回调一律通过 ref 取最新值。
+   *
+   * 菜单结构只依赖少数几个「结构性」属性（是否有标签、文件类型、面板、视图…），
+   * 因此 useMemo 的依赖列表可以只写这些原始值；但回调（如 onZoom）每次渲染
+   * 都是新闭包，若随结构一起缓存就会调用到旧闭包（缩放步长用旧的字号）。
+   */
+  const cb = useRef(p);
+  cb.current = p;
+
+  const { hasTab, isJson, fileKind, panel, view, parseMode, theme, recentFiles } = p;
 
   const menus = useMemo<Menu[]>(() => {
-    const jsonOnly = !p.hasTab || !p.isJson;
-    const views = viewsFor(p.fileKind);
+    const q = cb.current;
+    const jsonOnly = !q.hasTab || !q.isJson;
+    const views = viewsFor(q.fileKind);
     return [
       {
         label: "文件",
         entries: [
-          { label: "新建标签", shortcut: "Ctrl+N", onClick: p.onNewTab },
-          { label: "打开文件…", shortcut: "Ctrl+O", onClick: p.onOpen },
-          { label: "保存", shortcut: "Ctrl+S", disabled: !p.hasTab, onClick: p.onSave },
-          { label: "另存为…", shortcut: "Ctrl+Shift+S", disabled: !p.hasTab, onClick: p.onSaveAs },
-          { label: "关闭当前标签", shortcut: "Ctrl+W", disabled: !p.hasTab, onClick: p.onCloseTab },
+          { label: "新建标签", shortcut: "Ctrl+N", onClick: q.onNewTab },
+          { label: "打开文件…", shortcut: "Ctrl+O", onClick: q.onOpen },
+          { label: "保存", shortcut: "Ctrl+S", disabled: !q.hasTab, onClick: q.onSave },
+          { label: "另存为…", shortcut: "Ctrl+Shift+S", disabled: !q.hasTab, onClick: q.onSaveAs },
+          { label: "关闭当前标签", shortcut: "Ctrl+W", disabled: !q.hasTab, onClick: q.onCloseTab },
           "separator",
-          ...(p.recentFiles.length
+          ...(q.recentFiles.length
             ? [
                 { label: "最近文件", disabled: true } as Item,
-                ...p.recentFiles.slice(0, 8).map((path) => ({
+                ...q.recentFiles.slice(0, 8).map((path) => ({
                   label: path,
-                  onClick: () => p.onOpenRecent(path),
+                  onClick: () => q.onOpenRecent(path),
                 })),
                 "separator" as const,
               ]
             : []),
-          { label: "将当前标签分离为独立窗口", disabled: !p.hasTab, onClick: p.onDetach },
+          { label: "将当前标签分离为独立窗口", disabled: !q.hasTab, onClick: q.onDetach },
           "separator",
-          { label: "退出", onClick: p.onQuit },
+          { label: "退出", onClick: q.onQuit },
         ],
       },
       {
         label: "编辑",
         entries: [
-          { label: "撤销", shortcut: "Ctrl+Z", disabled: !p.hasTab, onClick: p.onUndo },
-          { label: "重做", shortcut: "Ctrl+Y", disabled: !p.hasTab, onClick: p.onRedo },
+          { label: "撤销", shortcut: "Ctrl+Z", disabled: !q.hasTab, onClick: q.onUndo },
+          { label: "重做", shortcut: "Ctrl+Y", disabled: !q.hasTab, onClick: q.onRedo },
           "separator",
-          { label: "查找…", shortcut: "Ctrl+F", disabled: !p.hasTab, onClick: p.onFind },
-          { label: "查找下一个", shortcut: "F3", disabled: !p.hasTab, onClick: p.onFindNext },
+          { label: "查找…", shortcut: "Ctrl+F", disabled: !q.hasTab, onClick: q.onFind },
+          { label: "查找下一个", shortcut: "F3", disabled: !q.hasTab, onClick: q.onFindNext },
           "separator",
-          { label: "重新解析", shortcut: "F5", disabled: !p.hasTab, onClick: p.onReparse },
+          { label: "重新解析", shortcut: "F5", disabled: !q.hasTab, onClick: q.onReparse },
           "separator",
-          { label: "复制全部内容", disabled: !p.hasTab, onClick: p.onCopyText },
-          { label: "复制文件路径", disabled: !p.hasTab, onClick: p.onCopyPath },
+          { label: "复制全部内容", disabled: !q.hasTab, onClick: q.onCopyText },
+          { label: "复制文件路径", disabled: !q.hasTab, onClick: q.onCopyPath },
         ],
       },
       {
         label: "搜索",
         entries: [
-          { label: "文档查找…", shortcut: "Ctrl+F", disabled: !p.hasTab, onClick: p.onFind },
-          { label: "文档替换…", shortcut: "Ctrl+H", disabled: !p.hasTab, onClick: p.onReplace },
+          { label: "文档查找…", shortcut: "Ctrl+F", disabled: !q.hasTab, onClick: q.onFind },
+          { label: "文档替换…", shortcut: "Ctrl+H", disabled: !q.hasTab, onClick: q.onReplace },
           {
             label: "在文件夹中搜索",
             shortcut: "Ctrl+Alt+F",
-            disabled: !p.hasTab,
-            onClick: p.onSearchFolder,
+            disabled: !q.hasTab,
+            onClick: q.onSearchFolder,
           },
           "separator",
           {
             label: "JSONPath 查询",
             shortcut: "Ctrl+G",
-            checked: p.panel === "query",
-            disabled: !p.isJson,
-            onClick: p.onQueryPanel,
+            checked: q.panel === "query",
+            disabled: !q.isJson,
+            onClick: q.onQueryPanel,
           },
         ],
       },
@@ -139,31 +151,31 @@ export const MenuBar: React.FC<MenuBarProps> = (p) => {
             label: "格式化 JSON",
             shortcut: "Ctrl+Shift+F",
             disabled: jsonOnly,
-            onClick: p.onFormat,
+            onClick: q.onFormat,
           },
-          { label: "压缩 JSON", disabled: jsonOnly, onClick: p.onMinify },
-          { label: "键排序", disabled: jsonOnly, onClick: p.onSort },
+          { label: "压缩 JSON", disabled: jsonOnly, onClick: q.onMinify },
+          { label: "键排序", disabled: jsonOnly, onClick: q.onSort },
           "separator",
-          { label: "转义字符串", disabled: !p.hasTab, onClick: p.onEscapeString },
-          { label: "反转义字符串", disabled: !p.hasTab, onClick: p.onUnescapeString },
+          { label: "转义字符串", disabled: !q.hasTab, onClick: q.onEscapeString },
+          { label: "反转义字符串", disabled: !q.hasTab, onClick: q.onUnescapeString },
           "separator",
           {
             label: "解析模式：严格 JSON",
-            checked: p.parseMode === "strict",
-            disabled: !p.hasTab,
-            onClick: () => p.onParseMode("strict"),
+            checked: q.parseMode === "strict",
+            disabled: !q.hasTab,
+            onClick: () => q.onParseMode("strict"),
           },
           {
             label: "解析模式：JSONC（注释 / 尾逗号）",
-            checked: p.parseMode === "jsonc",
-            disabled: !p.hasTab,
-            onClick: () => p.onParseMode("jsonc"),
+            checked: q.parseMode === "jsonc",
+            disabled: !q.hasTab,
+            onClick: () => q.onParseMode("jsonc"),
           },
           {
             label: "解析模式：JSONL（逐行）",
-            checked: p.parseMode === "jsonl",
-            disabled: !p.hasTab,
-            onClick: () => p.onParseMode("jsonl"),
+            checked: q.parseMode === "jsonl",
+            disabled: !q.hasTab,
+            onClick: () => q.onParseMode("jsonl"),
           },
         ],
       },
@@ -173,33 +185,33 @@ export const MenuBar: React.FC<MenuBarProps> = (p) => {
           {
             label: "查看工具",
             shortcut: "Ctrl+B",
-            checked: p.panel === "viewer",
-            onClick: () => p.onTogglePanel("viewer"),
+            checked: q.panel === "viewer",
+            onClick: () => q.onTogglePanel("viewer"),
           },
           "separator",
           ...views.map((v) => ({
             label: `${v.label}视图`,
-            checked: p.panel === "viewer" && p.view === v.value,
+            checked: q.panel === "viewer" && q.view === v.value,
             onClick: () => {
-              p.onView(v.value);
-              p.onShowPanel("viewer");
+              q.onView(v.value);
+              q.onShowPanel("viewer");
             },
           })),
           "separator",
           {
             label: "JSONPath 查询面板",
-            checked: p.panel === "query",
-            onClick: () => p.onTogglePanel("query"),
+            checked: q.panel === "query",
+            onClick: () => q.onTogglePanel("query"),
           },
           {
             label: "设置面板",
-            checked: p.panel === "settings",
-            onClick: () => p.onTogglePanel("settings"),
+            checked: q.panel === "settings",
+            onClick: () => q.onTogglePanel("settings"),
           },
           "separator",
-          { label: "深色模式", checked: p.theme === "dark", onClick: p.onToggleTheme },
-          { label: "放大字号", shortcut: "Ctrl+=", onClick: () => p.onZoom(1) },
-          { label: "缩小字号", shortcut: "Ctrl+-", onClick: () => p.onZoom(-1) },
+          { label: "深色模式", checked: q.theme === "dark", onClick: q.onToggleTheme },
+          { label: "放大字号", shortcut: "Ctrl+=", onClick: () => q.onZoom(1) },
+          { label: "缩小字号", shortcut: "Ctrl+-", onClick: () => q.onZoom(-1) },
         ],
       },
       {
@@ -208,17 +220,17 @@ export const MenuBar: React.FC<MenuBarProps> = (p) => {
           {
             label: "设置…",
             shortcut: "Ctrl+,",
-            checked: p.panel === "settings",
-            onClick: () => p.onTogglePanel("settings"),
+            checked: q.panel === "settings",
+            onClick: () => q.onTogglePanel("settings"),
           },
         ],
       },
       {
         label: "帮助",
-        entries: [{ label: "关于 FileView", onClick: p.onAbout }],
+        entries: [{ label: "关于 FileView", onClick: q.onAbout }],
       },
     ];
-  }, [p]);
+  }, [hasTab, isJson, fileKind, panel, view, parseMode, theme, recentFiles]);
 
   useEffect(() => {
     if (openIndex === null) return;
@@ -227,13 +239,16 @@ export const MenuBar: React.FC<MenuBarProps> = (p) => {
       if (barRef.current && !barRef.current.contains(e.target as Node)) close();
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") close();
+      if (e.key !== "Escape") return;
+      // 捕获阶段处理并阻断传播：否则同一次 Esc 会连带把侧栏面板 / 查找栏也关掉
+      e.stopPropagation();
+      close();
     };
     window.addEventListener("mousedown", onDown);
-    window.addEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, true);
     return () => {
       window.removeEventListener("mousedown", onDown);
-      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keydown", onKey, true);
     };
   }, [openIndex]);
 

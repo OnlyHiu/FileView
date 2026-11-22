@@ -149,6 +149,35 @@ body {
   cursor: text;
 }
 
+/*
+ * Editor text area: text is transparent, the real text is drawn by the
+ * syntax-highlight layer underneath.
+ *
+ * By default, when text is selected the browser renders the selected
+ * characters using the selection foreground color (an opaque highlight
+ * foreground) — the transparent text becomes visible a second time and
+ * overlaps with the highlight layer, producing a "ghost double image".
+ *
+ * Fix: force the selection foreground to transparent as well, leaving only
+ * the selection background — the highlight layer's text passes straight
+ * through the translucent background, so it stays readable.
+ */
+.editor-surface::selection {
+  background-color: rgba(0, 103, 192, 0.3);
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+}
+.editor-surface::-moz-selection {
+  background-color: rgba(0, 103, 192, 0.3);
+  color: transparent;
+}
+[data-theme="dark"] .editor-surface::selection {
+  background-color: rgba(76, 194, 255, 0.32);
+}
+[data-theme="dark"] .editor-surface::-moz-selection {
+  background-color: rgba(76, 194, 255, 0.32);
+}
+
 /* Scrollbars – Windows 11 style thin overlay */
 * {
   scrollbar-width: thin;
@@ -227,7 +256,24 @@ body {
 .markdown-body p { margin: 0.6em 0; }
 .markdown-body ul,
 .markdown-body ol { margin: 0.6em 0; padding-left: 1.6em; }
-.markdown-body li { margin: 0.25em 0; }
+/* Tailwind 的 preflight 会把列表标记清掉（list-style: none），
+   Markdown 预览里必须显式恢复，否则列表项没有任何标记 */
+.markdown-body ul { list-style: disc outside; }
+.markdown-body ol { list-style: decimal outside; }
+.markdown-body li { margin: 0.25em 0; display: list-item; }
+/* Nested lists: indent a level further */
+.markdown-body li > ul,
+.markdown-body li > ol { margin: 0.2em 0; padding-left: 1.3em; }
+/* Task list checkboxes */
+.markdown-body .md-check {
+  display: inline-block;
+  margin-right: 0.35em;
+  color: var(--ink-tertiary);
+  font-style: normal;
+}
+.markdown-body .md-check-on {
+  color: var(--accent-text);
+}
 .markdown-body code {
   font-family: ui-monospace, Consolas, monospace;
   background: var(--smoke-bg-subtle);

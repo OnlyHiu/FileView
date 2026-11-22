@@ -11,7 +11,7 @@
 ![rust](https://img.shields.io/badge/Rust-stable-orange?logo=rust)
 ![license](https://img.shields.io/badge/license-MIT-green)
 
-[功能](#-功能) · [界面](#-界面预览) · [格式](#-支持格式) · [下载](#-下载) · [开发](#-开发) · [许可证](#-许可证)
+[功能](#-功能) · [界面](#-界面预览) · [格式](#-支持格式) · [下载](#-下载) · [更新日志](docs/CHANGELOG.md) · [开发](#-开发) · [许可证](#-许可证)
 
 </div>
 
@@ -35,7 +35,7 @@ FileView 是一款 Windows 桌面应用，采用 Notepad++ 的操作逻辑：**�
 
 | 模块 | 说明 |
 |---|---|
-| **多格式查看** | JSON：树形（虚拟滚动）/ 表格（对象数组转表）/ 原始；Markdown：预览 / 源码；YAML·TOML：键结构 / 源码；CSV·TSV：表格（自动识别分隔符）；XML：标签树；HTML：沙箱预览；代码文件：符号大纲 / 源码；日志：级别与时间戳着色 |
+| **多格式查看** | JSON：树形（虚拟滚动）/ 表格（对象数组转表）/ 原始；Markdown：预览（标题 / 列表 / 引用 / 表格 / 硬换行，结构保真）/ 源码；YAML·TOML：键结构 / 源码；CSV·TSV：表格（自动识别分隔符）；XML：标签树；HTML：沙箱预览；代码文件：符号大纲 / 源码；日志：级别与时间戳着色 |
 | **面板化布局** | 文档区始终显示文本；查看工具 / JSONPath 查询 / 设置均为右侧可拖拽停靠面板，互不遮挡，Esc 一键关闭 |
 | **查找与替换** | Notepad++ 式查找：命中在文档中高亮、查找 / 替换词历史下拉回选、区分大小写、替换 / 全部替换（`Ctrl+F` / `Ctrl+H`）、`Enter` 逐处跳转、`F3` 下一处 |
 | **文件夹搜索** | `Ctrl+Alt+F` 在文件夹中递归搜索：底部「搜索结果」窗口列出全部命中（文件 + 行列 + 原文），点击即跳转定位，并可对全部命中批量替换 |
@@ -79,8 +79,8 @@ FileView 是一款 Windows 桌面应用，采用 Notepad++ 的操作逻辑：**�
 
 | 文件 | 说明 |
 |---|---|
-| [**FileView_0.2.1_x64_zh-CN.msi**](https://github.com/OnlyHiu/FileView/releases/latest/download/FileView_0.2.1_x64_zh-CN.msi) | MSI 安装包（简体中文，推荐）|
-| [**FileView_0.2.1_x64_en-US.msi**](https://github.com/OnlyHiu/FileView/releases/latest/download/FileView_0.2.1_x64_en-US.msi) | MSI 安装包（英文）|
+| [**FileView_0.2.2_x64_zh-CN.msi**](https://github.com/OnlyHiu/FileView/releases/latest/download/FileView_0.2.2_x64_zh-CN.msi) | MSI 安装包（简体中文，推荐）|
+| [**FileView_0.2.2_x64_en-US.msi**](https://github.com/OnlyHiu/FileView/releases/latest/download/FileView_0.2.2_x64_en-US.msi) | MSI 安装包（英文）|
 | [**fileview.exe**](https://github.com/OnlyHiu/FileView/releases/latest/download/fileview.exe) | 免安装单文件，双击即用 |
 
 > 安装包使用 **Microsoft WiX Toolset** 官方工具链生成（MSI 格式）。
@@ -129,10 +129,17 @@ node scripts/bench-highlight.mjs  # 大文件分词性能基准
 │   └── src/main.rs         # Tauri 命令层
 ├── scripts/                # 辅助脚本（图标生成、一致性校验、性能基准）
 ├── push.bat                # 一键推送到仓库
-├── docs/DESIGN-PLAN.md     # 设计计划
-├── docs/PLAN-v0.2.0.md      # v0.2.0 需求计划
-├── docs/RELEASE-v0.2.0.md  # v0.2.0 发行说明
-└── docs/AUDIT-v0.2.0.md    # v0.2.0 代码审核报告
+└── docs/                   # 版本控制文档（索引见 docs/README.md）
+    ├── README.md           # 文档索引与写作规范
+    ├── CHANGELOG.md        # 全部版本的变更汇总
+    ├── DESIGN-PLAN.md      # 设计计划（v1.0 愿景，仅作演进背景）
+    ├── PLAN-v0.2.0.md      # v0.2.0 需求计划
+    ├── RELEASE-v0.2.0.md   # v0.2.0 发行说明
+    ├── AUDIT-v0.2.0.md     # v0.2.0 代码审核报告
+    ├── RELEASE-v0.2.1.md   # v0.2.1 发行说明
+    ├── PLAN-v0.2.2.md      # v0.2.2 需求计划
+    ├── RELEASE-v0.2.2.md   # v0.2.2 发行说明
+    └── AUDIT-v0.2.2.md     # v0.2.2 代码审核报告
 
 ## 🔗 系统集成实现说明
 

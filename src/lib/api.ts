@@ -378,8 +378,12 @@ export interface DetachPayload {
 export async function detachTabToWindow(payload: DetachPayload): Promise<boolean> {
   if (!isTauri()) return false;
   const label = `detached-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-  const url = payload.path
-    ? `index.html?detach=1&file=${encodeURIComponent(payload.path)}`
+  // 只有「有磁盘路径且无未保存修改」时才让新窗口自行读盘；
+  // 否则必须走内存文本通道——否则新窗口读到的是磁盘上的旧内容，
+  // 未保存的修改会静默丢失（主窗口随后还会关闭该标签）。
+  const useDisk = !!payload.path && !payload.dirty;
+  const url = useDisk
+    ? `index.html?detach=1&file=${encodeURIComponent(payload.path!)}`
     : "index.html?detach=1";
 
   let x: number | undefined;
@@ -456,7 +460,7 @@ export async function detachTabToWindow(payload: DetachPayload): Promise<boolean
       return false;
     }
     // 无磁盘路径 / 有未保存修改：把内存文本交给新窗口
-    if (!payload.path || payload.dirty) {
+    if (!useDisk) {
       await emitTo(label, "detach-payload", payload);
     }
     return true;

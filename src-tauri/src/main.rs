@@ -122,7 +122,23 @@ fn read_file_text(path: String) -> Result<FilePayload, String> {
 
 #[tauri::command]
 fn write_file_text(path: String, text: String) -> Result<(), String> {
-    std::fs::write(&path, text).map_err(|e| format!("保存失败: {}", e))
+    // 原子写：先写同目录临时文件再改名替换。
+    // 直接 fs::write 会先截断目标文件，过程中崩溃 / 磁盘满会留下半截文件，
+    // 用户辛苦编辑的内容就没了（设置文件的保存早已是这个模式）。
+    let target = std::path::Path::new(&path);
+    let dir = target.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let file_name = target
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "fileview.tmp".to_string());
+    let tmp = dir.join(format!(".{}.{}.tmp", file_name, std::process::id()));
+    std::fs::write(&tmp, text.as_bytes()).map_err(|e| format!("保存失败: {e}"))?;
+    if let Err(e) = std::fs::rename(&tmp, target) {
+        // 改名失败（目标被占用等）：清理临时文件，别留下垃圾
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!("保存失败: {e}"));
+    }
+    Ok(())
 }
 
 /// 文件修改时间（UNIX 秒）；文件不存在返回 None。供文件监视自动重载使用。
@@ -173,14 +189,17 @@ fn install_context_menu(targets: Vec<String>) -> Result<Vec<String>, String> {
         .iter()
         .filter_map(|t| sys::context_menu::MenuTarget::from_id(t))
         .collect();
-    // 先移除不在列表中的目标
+    // 先移除不在列表中的目标。
+    // 必须**一次性**卸载：逐个调用会让每个目标各触发一次
+    // SHCNE_ASSOCCHANGED 广播（资源管理器全量重读关联库，桌面图标闪烁）。
     let current = sys::context_menu::status();
-    for (id, on) in current {
-        if on && !targets.contains(&id) {
-            if let Some(t) = sys::context_menu::MenuTarget::from_id(&id) {
-                sys::context_menu::uninstall(&[t])?;
-            }
-        }
+    let stale: Vec<sys::context_menu::MenuTarget> = current
+        .iter()
+        .filter(|(id, on)| *on && !targets.contains(id))
+        .filter_map(|(id, _)| sys::context_menu::MenuTarget::from_id(id))
+        .collect();
+    if !stale.is_empty() {
+        sys::context_menu::uninstall(&stale)?;
     }
     sys::context_menu::install(&list)
 }
@@ -256,8 +275,11 @@ fn main() {
             // 按设置幂等注入系统集成：注册表被外部清理或设置被离线修改后，启动即恢复，
             // 保证设置页勾选的文件关联/右键菜单「设置了就生效」。
             // 批量注册：避免每个扩展名都触发一次能力表重建与 Shell 广播。
-            if !loaded.associated_extensions.is_empty() {
-                let _ = sys::file_assoc::register_many(&loaded.associated_extensions);
+            // 扩展名先过滤：设置文件里混入一个不受支持的项会让整批注册失败，
+            // 结果是所有关联都注册不上且毫无提示。
+            let exts = sys::file_assoc::filter_supported(&loaded.associated_extensions);
+            if !exts.is_empty() {
+                let _ = sys::file_assoc::register_many(&exts);
             }
             if !loaded.context_menu_targets.is_empty() {
                 let list: Vec<sys::context_menu::MenuTarget> = loaded

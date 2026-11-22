@@ -27,14 +27,26 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   message: null,
 
   load: async () => {
-    const settings = await api.getSettings();
-    set({ settings });
+    try {
+      const settings = await api.getSettings();
+      set({ settings });
+    } catch (e) {
+      // 不吞异常：读不到设置时保留默认值，并把原因告诉用户
+      set({ message: `读取设置失败: ${e}` });
+      return;
+    }
     await get().refreshIntegration();
   },
 
   patch: async (p) => {
-    const settings = await api.updateSettings(p);
-    set({ settings });
+    try {
+      const settings = await api.updateSettings(p);
+      set({ settings });
+    } catch (e) {
+      // 调用方几乎都用 void patch(...)：不捕获就会变成未处理的 Promise 拒绝，
+      // 用户既看不到提示，也以为设置已生效
+      set({ message: `保存设置失败: ${e}` });
+    }
   },
 
   refreshIntegration: async () => {

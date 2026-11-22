@@ -15,8 +15,6 @@ import {
   type ViewMode,
 } from "../lib/types";
 
-export type { ViewMode };
-
 /** 右侧工具面板：none = 全部收起，文档区独占 */
 export type PanelKind = "none" | "viewer" | "query" | "settings";
 
@@ -133,6 +131,8 @@ let tabSeq = 1;
 
 /** reparse 竞态保护：单调递增序号，丢弃过期结果 */
 let reparseSeq = 0;
+/** runQuery 竞态保护：单调递增序号，丢弃过期结果 */
+let querySeq = 0;
 /** 编辑防抖定时器 */
 let reparseTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -173,10 +173,20 @@ export function getDiskBaseline(path: string): string | undefined {
   return diskBaselines.get(path);
 }
 
-/** 记录最近打开文件（最多 10 条，最近优先），持久化到设置 */
+/**
+ * 记录最近打开文件（最多 10 条，最近优先），持久化到设置。
+ *
+ * 用模块级累加器串行化：settings.recentFiles 只在 patch 的 IPC 回来后才更新，
+ * 两次 loadFile 落在同一个 IPC 窗口内时若都基于旧值计算，后一次会覆盖前一次
+ * （会话恢复时按路径逐个 loadFile 就会触发）。
+ */
+let recentAccumulator: string[] | null = null;
+
 function recordRecent(path: string) {
   const st = useSettingsStore.getState();
-  const recent = [path, ...st.settings.recentFiles.filter((p) => p !== path)].slice(0, 10);
+  const base = recentAccumulator ?? st.settings.recentFiles ?? [];
+  const recent = [path, ...base.filter((p) => p !== path)].slice(0, 10);
+  recentAccumulator = recent;
   void st.patch({ recentFiles: recent });
 }
 
@@ -332,6 +342,11 @@ export const useJsonStore = create<JsonState>((set, get) => ({
       selectedId: null,
       searchHits: [],
       result: null,
+      // JSONPath 查询结果同样属于文档维度，跨标签复用会显示上一个文件的路径
+      queryHits: [],
+      queryError: null,
+      // 外部定位请求同样按文档维度，切走即作废
+      docReveal: null,
       ...docStateFor(s.tabs.find((t) => t.id === id), s.view),
       ...panelForDoc(s, s.tabs.find((t) => t.id === id)),
     }));
@@ -342,18 +357,37 @@ export const useJsonStore = create<JsonState>((set, get) => ({
 
   loadFile: (path, text) => {
     const name = path.split(/[\\/]/).pop() ?? path;
-    diskBaselines.set(path, text);
     recordRecent(path);
+    const existing = get().tabs.find((t) => t.path === path);
+    // 已有未保存修改的同一文件：**不能**用磁盘内容覆盖内存文本，
+    // 否则用户未保存的编辑会被静默丢弃（且脏标记也会被抹掉）。
+    if (existing && isTabDirty(existing)) {
+      set((s) => ({
+        activeTabId: existing.id,
+        // 与切换标签一致：解析结果 / 折叠 / 命中都按文档维度重置
+        expanded: {},
+        selectedId: null,
+        searchHits: [],
+        result: null,
+        queryHits: [],
+        queryError: null,
+        statusMessage: `「${name}」有未保存的修改，已保留当前内容（请先保存或另存为）`,
+      }));
+      get().syncFind();
+      void get().reparse();
+      return;
+    }
+    diskBaselines.set(path, text);
     set((s) => {
-      const existing = s.tabs.find((t) => t.path === path);
-      if (existing) {
+      const existingTab = s.tabs.find((t) => t.path === path);
+      if (existingTab) {
         return {
-          activeTabId: existing.id,
-          tabs: s.tabs.map((t) => (t.id === existing.id ? { ...t, text } : t)),
+          activeTabId: existingTab.id,
+          tabs: s.tabs.map((t) => (t.id === existingTab.id ? { ...t, text } : t)),
           expanded: {},
           selectedId: null,
-          ...docStateFor(existing, s.view),
-          ...(autoPreviewFor(existing) ?? {}),
+          ...docStateFor(existingTab, s.view),
+          ...(autoPreviewFor(existingTab) ?? {}),
         };
       }
       const t: Tab = { id: tabSeq++, name, path, text };
@@ -425,17 +459,21 @@ export const useJsonStore = create<JsonState>((set, get) => ({
     // 记录撤销历史：连续输入在 600ms 内合并为一步
     const s = get();
     const tab = s.tabs.find((t) => t.id === s.activeTabId);
-    if (!tab || prevText === undefined || prevText === text) return;
-    const h = historyOf(tab.id);
-    const now = Date.now();
-    if (now - h.lastEditAt > EDIT_COALESCE_MS) {
-      h.undo.push(prevText);
-      if (h.undo.length > HISTORY_LIMIT) h.undo.shift();
+    // 自动创建空白文档时没有「上一个文本」：无需记历史，
+    // 但仍要重算命中并触发解析，否则新文档永远不会被解析。
+    if (!tab) return;
+    if (prevText !== undefined && prevText !== text) {
+      const h = historyOf(tab.id);
+      const now = Date.now();
+      if (now - h.lastEditAt > EDIT_COALESCE_MS) {
+        h.undo.push(prevText);
+        if (h.undo.length > HISTORY_LIMIT) h.undo.shift();
+      }
+      // 任何新编辑都必须作废重做栈——否则「撤销 → 继续输入 → 重做」会用旧内容
+      // 覆盖用户刚输入的字符，造成静默丢字。
+      h.redo.length = 0;
+      h.lastEditAt = now;
     }
-    // 任何新编辑都必须作废重做栈——否则「撤销 → 继续输入 → 重做」会用旧内容
-    // 覆盖用户刚输入的字符，造成静默丢字。
-    h.redo.length = 0;
-    h.lastEditAt = now;
     // 文本已变：查找命中偏移必须重算，否则会跳到错误位置
     get().syncFind();
     // 防抖解析：连续输入时不逐键触发
@@ -490,12 +528,16 @@ export const useJsonStore = create<JsonState>((set, get) => ({
     const { activeTabId, tabs, parseMode } = get();
     const tab = tabs.find((t) => t.id === activeTabId);
     if (!tab) return;
+    // 序号先于所有分支递增：否则「切到空白 / 非 JSON 文档」时，
+    // 在途的旧解析仍会通过 seq 校验，把上一个文档的树写进当前文档。
+    const seq = ++reparseSeq;
     // 空白文档：不解析、不报错，展示空状态
     if (!tab.text.trim()) {
       set({
         result: null,
         parsing: false,
         searchHits: [],
+        selectedId: null,
         statusMessage: "空白文档 — 打开文件或粘贴内容",
       });
       return;
@@ -507,11 +549,11 @@ export const useJsonStore = create<JsonState>((set, get) => ({
         result: null,
         parsing: false,
         searchHits: [],
+        selectedId: null,
         statusMessage: `${kindLabel(kind)} · ${countLines(tab.text).toLocaleString()} 行 · ${formatBytes(tab.text.length)}`,
       });
       return;
     }
-    const seq = ++reparseSeq;
     set({ parsing: true });
     try {
       const result = await api.parseJson(tab.text, parseMode);
@@ -523,10 +565,29 @@ export const useJsonStore = create<JsonState>((set, get) => ({
       for (const n of result.nodes) {
         if (n.path in prev) merged[n.path] = prev[n.path];
       }
+      // 搜索命中 / 选中项存的是节点 id，而 id 每次解析都会重排 →
+      // 按**路径**重新映射，避免高亮与选中落到别的节点上。
+      const prevHits = get().searchHits;
+      const prevSelected = get().selectedId;
+      const interesting = new Set<number>(prevHits);
+      if (prevSelected !== null) interesting.add(prevSelected);
+      const idByPath = new Map(result.nodes.map((n) => [n.path, n.id]));
+      const prevPaths = new Map<number, string>();
+      for (const n of get().result?.nodes ?? []) {
+        if (interesting.has(n.id)) prevPaths.set(n.id, n.path);
+      }
+      const remap = (id: number): number | null => {
+        const p = prevPaths.get(id);
+        return p !== undefined ? (idByPath.get(p) ?? null) : null;
+      };
+      const hits = prevHits.map(remap).filter((v): v is number => v !== null);
+      const selected = prevSelected !== null ? remap(prevSelected) : null;
       set({
         result,
         parsing: false,
         expanded: merged,
+        searchHits: hits,
+        selectedId: selected,
         statusMessage: result.diagnostics.length
           ? `发现 ${result.diagnostics.length} 个问题`
           : `解析完成：${result.stats.total_nodes} 个节点 · ${result.stats.elapsed_ms}ms`,
@@ -689,7 +750,9 @@ export const useJsonStore = create<JsonState>((set, get) => ({
     const text = tab?.text ?? "";
     // 大文档逐键扫描全文会明显卡顿：命中计算防抖，查询词本身立即生效
     if (text.length > FIND_DEBOUNCE_THRESHOLD) {
-      set({ findQuery: q, findNavigated: false });
+      // 命中是**旧查询词**的偏移，必须一并清空：
+      // 否则「全部替换」会用新查询词的长度去改旧命中的位置 → 文档被写坏。
+      set({ findQuery: q, findNavigated: false, findMatches: [], findIndex: -1 });
       scheduleFindScan(q, s.findCaseSensitive);
       return;
     }
@@ -721,6 +784,8 @@ export const useJsonStore = create<JsonState>((set, get) => ({
     const tab = s.tabs.find((t) => t.id === s.activeTabId);
     const text = tab?.text ?? "";
     if (text.length > FIND_DEBOUNCE_THRESHOLD) {
+      // 命中尚未重算（旧查询词的偏移）→ 先清空，避免替换写坏文档
+      set({ findMatches: [], findIndex: -1 });
       scheduleFindScan(s.findQuery, s.findCaseSensitive);
       return;
     }
@@ -737,7 +802,8 @@ export const useJsonStore = create<JsonState>((set, get) => ({
     const text = tab?.text ?? "";
     const caseSensitive = !s.findCaseSensitive;
     if (text.length > FIND_DEBOUNCE_THRESHOLD) {
-      set({ findCaseSensitive: caseSensitive, findNavigated: false });
+      // 命中尚未按新的大小写敏感度重算 → 先清空
+      set({ findCaseSensitive: caseSensitive, findNavigated: false, findMatches: [], findIndex: -1 });
       scheduleFindScan(s.findQuery, caseSensitive);
       return;
     }
@@ -760,6 +826,9 @@ export const useJsonStore = create<JsonState>((set, get) => ({
       findIndex: idx,
       findNonce: s.findNonce + 1,
       findNavigated: true,
+      // 用户主动用查找导航：作废上一次「搜索结果点击」的定位请求，
+      // 否则它会一直占着定位通道，F3 就动不了光标
+      docReveal: null,
       statusMessage: `查找命中 ${s.findMatches.length} 处（第 ${idx + 1} 处）`,
     });
   },
@@ -774,6 +843,7 @@ export const useJsonStore = create<JsonState>((set, get) => ({
       findIndex: idx,
       findNonce: s.findNonce + 1,
       findNavigated: true,
+      docReveal: null,
       statusMessage: `查找命中 ${s.findMatches.length} 处（第 ${idx + 1} 处）`,
     });
   },
@@ -793,16 +863,24 @@ export const useJsonStore = create<JsonState>((set, get) => ({
       set({ statusMessage: "没有可替换的命中" });
       return;
     }
-    const idx = s.findIndex >= 0 ? s.findIndex : 0;
-    const start = s.findMatches[idx];
+    const cur = s.findIndex >= 0 ? s.findIndex : 0;
+    const start = s.findMatches[cur];
     if (start === undefined) return;
     const tab = s.tabs.find((t) => t.id === s.activeTabId);
     if (!tab) return;
     const end = start + query.length;
     const next = tab.text.slice(0, start) + s.replaceQuery + tab.text.slice(end);
     get().setEditorText(next);
-    // 命中重新计算后仍停在同一处（findIndex 由 syncFind 保留）
-    set({ statusMessage: `已替换 1 处（共 ${s.findMatches.length} 处）` });
+    // 替换后命中整体后移：setEditorText 已重算命中，这里定位到下一处
+    const fresh = get().findMatches;
+    let nextIdx = fresh.findIndex((m) => m >= start + s.replaceQuery.length);
+    if (nextIdx < 0) nextIdx = 0;
+    set({
+      findIndex: nextIdx,
+      findNonce: get().findNonce + 1,
+      findNavigated: true,
+      statusMessage: `已替换 1 处（共 ${fresh.length} 处）`,
+    });
   },
 
   /** 替换文档内全部命中 */
@@ -842,11 +920,15 @@ export const useJsonStore = create<JsonState>((set, get) => ({
     const { activeTabId, tabs, queryExpr, parseMode } = get();
     const tab = tabs.find((t) => t.id === activeTabId);
     if (!tab) return;
+    const seq = ++querySeq;
     try {
       const hits = await api.queryJson(tab.text, queryExpr, parseMode);
+      // 期间可能切换了标签或改了表达式：过期结果直接丢弃
+      if (seq !== querySeq) return;
+      if (get().activeTabId !== tab.id) return;
       set({ queryHits: hits, queryError: null, statusMessage: `查询命中 ${hits.length} 条路径` });
     } catch (e) {
-      set({ queryHits: [], queryError: String(e) });
+      if (seq === querySeq) set({ queryHits: [], queryError: String(e) });
     }
   },
 
@@ -861,6 +943,11 @@ export const useJsonStore = create<JsonState>((set, get) => ({
     try {
       const indent = await getIndent();
       const out = await api.formatJson(tab.text, indent, parseMode);
+      // 期间可能切换了标签：写回必须回到原标签，否则会覆盖别的文档
+      if (get().activeTabId !== tab.id) {
+        set({ statusMessage: "已取消格式化：活动标签已切换" });
+        return;
+      }
       get().setEditorText(out);
       set({ statusMessage: "已格式化" });
     } catch (e) {
@@ -878,6 +965,10 @@ export const useJsonStore = create<JsonState>((set, get) => ({
     }
     try {
       const out = await api.minifyJson(tab.text, parseMode);
+      if (get().activeTabId !== tab.id) {
+        set({ statusMessage: "已取消压缩：活动标签已切换" });
+        return;
+      }
       get().setEditorText(out);
       set({ statusMessage: "已压缩" });
     } catch (e) {
@@ -896,6 +987,10 @@ export const useJsonStore = create<JsonState>((set, get) => ({
     try {
       const indent = await getIndent();
       const out = await api.sortKeysJson(tab.text, indent, parseMode);
+      if (get().activeTabId !== tab.id) {
+        set({ statusMessage: "已取消排序：活动标签已切换" });
+        return;
+      }
       get().setEditorText(out);
       set({ statusMessage: "已按键排序" });
     } catch (e) {
@@ -941,11 +1036,30 @@ function scheduleFindScan(query: string, caseSensitive: boolean): void {
   }, FIND_DEBOUNCE_MS);
 }
 
-/** 找出所有匹配位置（字符偏移） */
+/**
+ * 长度保持不变的小写化。
+ *
+ * 个别字符小写后长度会变（如 'İ' U+0130 → 'i̇' 两个码元），
+ * 直接用 toLowerCase() 会让命中偏移相对原文发生位移。
+ * 常规文本走快速路径（一次 toLowerCase）；只有真的变了长度才逐字符回退。
+ */
+function foldLower(s: string): string {
+  const lower = s.toLowerCase();
+  if (lower.length === s.length) return lower;
+  let out = "";
+  for (const ch of s) {
+    const l = ch.toLowerCase();
+    out += l.length === ch.length ? l : ch;
+  }
+  return out;
+}
+
+/** 找出所有匹配位置（字符偏移，相对**原文**） */
 function findAll(text: string, query: string, caseSensitive: boolean): number[] {
   if (!query) return [];
-  const hay = caseSensitive ? text : text.toLowerCase();
-  const needle = caseSensitive ? query : query.toLowerCase();
+  const hay = caseSensitive ? text : foldLower(text);
+  const needle = caseSensitive ? query : foldLower(query);
+  if (!needle) return [];
   const out: number[] = [];
   let from = 0;
   while (out.length < 5000) {

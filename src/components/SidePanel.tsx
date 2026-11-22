@@ -38,9 +38,12 @@ export const SidePanel: React.FC<{
         draggingRef.current = false;
         window.removeEventListener("pointermove", move);
         window.removeEventListener("pointerup", up);
+        // 指针在窗口外松开 / 触摸被取消时同样要清理，否则监听器会一直留着
+        window.removeEventListener("pointercancel", up);
       };
       window.addEventListener("pointermove", move);
       window.addEventListener("pointerup", up);
+      window.addEventListener("pointercancel", up);
     },
     [onWidthChange]
   );

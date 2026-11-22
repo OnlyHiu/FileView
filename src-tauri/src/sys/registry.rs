@@ -3,6 +3,8 @@
 //! 「写入清单」机制：所有本应用写入的键都会记录到
 //! `HKCU\Software\FileView\managed_keys`，保证卸载/清理时精准回滚。
 
+use std::sync::{Mutex, MutexGuard, OnceLock};
+
 use winreg::enums::*;
 use winreg::RegKey;
 
@@ -31,8 +33,24 @@ fn scoped(path: &str) -> String {
     format!(r"{}\{}", TEST_ROOT, path)
 }
 
+/**
+ * 「写入清单」串行锁。
+ *
+ * 清单的更新是「读 count → 写 keyN → 写 count」三步，
+ * 而 Tauri 的命令处理函数跑在异步线程池上，两条命令并发时
+ * 会读到同一个 count → 互相覆盖 → 清单出现空洞、计数虚高。
+ * 因此整个读改写过程必须串行化。
+ */
+fn managed_lock() -> MutexGuard<'static, ()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+}
+
 /// 记录受管理的注册表键路径（幂等：重复记录同一键不会使计数虚高）
 pub fn record_managed_key(key_path: &str) -> std::io::Result<()> {
+    let _guard = managed_lock();
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let (managed, _) = hkcu.create_subkey(scoped(&format!(r"{}\managed_keys", APP_KEY)))?;
     let count: u32 = managed.get_value("count").unwrap_or(0);
@@ -51,6 +69,7 @@ pub fn record_managed_key(key_path: &str) -> std::io::Result<()> {
 
 /// 从受管理清单中移除记录（卸载对应注册表键后调用，保证计数准确）
 pub fn forget_managed_key(key_path: &str) -> std::io::Result<()> {
+    let _guard = managed_lock();
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let (managed, _) = hkcu.create_subkey(scoped(&format!(r"{}\managed_keys", APP_KEY)))?;
     let count: u32 = managed.get_value("count").unwrap_or(0);
@@ -81,6 +100,7 @@ pub fn managed_key_count() -> u32 {
 
 /// 清空受管理键记录
 pub fn clear_managed_keys() -> std::io::Result<()> {
+    let _guard = managed_lock();
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let path = scoped(&format!(r"{}\managed_keys", APP_KEY));
     if hkcu.open_subkey(&path).is_ok() {

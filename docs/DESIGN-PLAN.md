@@ -4,15 +4,19 @@
 > 技术栈：**Tauri 2（Rust 后端）+ React 18 + Vite + Tailwind CSS**，设置页包含
 > **Windows 右键菜单注入、默认文件关联（默认打开方式）** 等系统集成功能。
 
-> **文档状态说明（2026-10-29）**
+> **文档状态说明（2026-11-22）**
 > 本文档是项目**最初的设计计划**，描述的是 v1.0 愿景。其中部分设想尚未实现或已调整：
 > - 品牌已由「JSON Viewer」更名为 **FileView**，产品定位从纯 JSON 查看器扩展为
 >   **多格式查看与编辑器**（Markdown / YAML / TOML / CSV / XML / HTML / 代码文件 / 日志）；
 > - 编辑器由计划中的 CodeMirror 6 改为**自研的 textarea + 高亮层叠加实现**（体积更小、可控性更强）；
 > - 计划中的 MSIX 双分发、跳转列表、i18n、CSV/YAML 导出等尚未落地。
 >
-> 实际交付状态见 [`PLAN-v0.2.0.md`](./PLAN-v0.2.0.md)、
+> 实际交付状态见 [`CHANGELOG.md`](./CHANGELOG.md)（全部版本变更汇总）、
+> [`PLAN-v0.2.2.md`](./PLAN-v0.2.2.md)、[`RELEASE-v0.2.2.md`](./RELEASE-v0.2.2.md)
+> 与 [`AUDIT-v0.2.2.md`](./AUDIT-v0.2.2.md)（最新代码审核报告）。
+> 历史版本文档见 [`PLAN-v0.2.0.md`](./PLAN-v0.2.0.md)、
 > [`RELEASE-v0.2.0.md`](./RELEASE-v0.2.0.md) 与 [`AUDIT-v0.2.0.md`](./AUDIT-v0.2.0.md)。
+> 文档索引与写作规范见 [`README.md`](./README.md)。
 > 下方内容保留原始设计思路，作为演进背景参考。
 
 ---

@@ -111,3 +111,98 @@ test("注释被移除", () => {
   const html = renderMarkdown("<!-- <script>alert(1)</script> -->");
   assert.equal(hasScript(html), false);
 });
+
+// ============================================================
+// 换行 / 分行结构（v0.2.2）
+//
+// 缺陷背景：引用块内的多行被 join(" ") 压成一行，引用块里的列表
+// 也退化成普通文本，导致「无法正确形成换行分行显示」。
+// ============================================================
+
+test("引用块内的多行分行显示，不再压成一行", () => {
+  const html = renderMarkdown("> 第一行\n> 第二行");
+  assert.equal(/<blockquote>[\s\S]*<\/blockquote>/.test(html), true);
+  // 引用块按源文件分行显示（提示框一行一条），不再被空格连接
+  assert.equal(/<p>第一行<br \/>第二行<\/p>/.test(html), true);
+  assert.equal(html.includes("第一行 第二行"), false, "不应再被合并为同一行");
+});
+
+test("引用块内的空行分段", () => {
+  const html = renderMarkdown("> a\n>\n> b");
+  assert.equal(/<blockquote><p>a<\/p>\s*<p>b<\/p><\/blockquote>/.test(html), true);
+});
+
+test("引用块内的列表渲染为列表", () => {
+  const html = renderMarkdown("> - 第一项\n> - 第二项");
+  assert.equal(/<blockquote><ul[^>]*><li>第一项<\/li><li>第二项<\/li><\/ul><\/blockquote>/.test(html), true);
+});
+
+test("引用块内的代码块保留围栏", () => {
+  const html = renderMarkdown("> 说明\n>\n> ```js\n> const a = 1;\n> ```");
+  assert.equal(/<blockquote>[\s\S]*<pre class="md-pre"><code>const a = 1;<\/code><\/pre>/.test(html), true);
+});
+
+test("行尾两个空格形成硬换行", () => {
+  const html = renderMarkdown("第一行  \n第二行");
+  assert.equal(/<p>第一行<br \/>第二行<\/p>/.test(html), true);
+});
+
+test("行尾反斜杠形成硬换行", () => {
+  const html = renderMarkdown("第一行\\\n第二行");
+  assert.equal(/<p>第一行<br \/>第二行<\/p>/.test(html), true);
+});
+
+test("软换行仍合并为同一段落", () => {
+  const html = renderMarkdown("第一行\n第二行");
+  assert.equal(/<p>第一行 第二行<\/p>/.test(html), true);
+});
+
+test("缩进嵌套列表保留层级", () => {
+  const html = renderMarkdown("- 一级\n  - 二级\n- 另一个");
+  assert.equal(/<li>一级<ul[^>]*><li>二级<\/li><\/ul><\/li>/.test(html), true);
+  assert.equal(/<li>另一个<\/li>/.test(html), true);
+});
+
+test("任务列表渲染复选标记", () => {
+  const html = renderMarkdown("- [ ] 未完成\n- [x] 已完成");
+  assert.equal(html.includes("☐"), true);
+  assert.equal(html.includes("☑"), true);
+});
+
+test("Setext 标题（=== / ---）被识别", () => {
+  const html = renderMarkdown("标题一\n======\n\n标题二\n------");
+  assert.equal(/<h1>标题一<\/h1>/.test(html), true);
+  assert.equal(/<h2>标题二<\/h2>/.test(html), true);
+});
+
+test("CRLF 行尾被规范化（不残留 \\r）", () => {
+  const html = renderMarkdown("# 标题\r\n\r\n正文\r\n");
+  assert.equal(html.includes("\r"), false);
+  assert.equal(/<h1>标题<\/h1>/.test(html), true);
+  assert.equal(/<p>正文<\/p>/.test(html), true);
+});
+
+test("表格分隔行列数必须与表头一致", () => {
+  // 只有一列分隔线时不应被当成表格
+  const html = renderMarkdown("普通文本 | 另一段\n---");
+  assert.equal(/<table/.test(html), false);
+});
+
+test("普通相对链接保留可用的 href", () => {
+  const html = renderMarkdown("[README](README.md) | [文档](docs/START-HERE.md)");
+  assert.equal(html.includes('href="README.md"'), true);
+  assert.equal(html.includes('href="docs/START-HERE.md"'), true);
+});
+
+test("链接地址中的 & 只转义一次", () => {
+  const html = renderMarkdown("[x](https://e.com/a?b=1&c=2)");
+  assert.equal(html.includes("&amp;c=2"), true);
+  assert.equal(html.includes("&amp;amp;"), false, "不应出现双重转义");
+});
+
+test("反斜杠转义的标点按原样输出", () => {
+  const html = renderMarkdown("\\*不是斜体\\*");
+  assert.equal(/<p>\*不是斜体\*<\/p>/.test(html), true);
+  assert.equal(/<em>/.test(html), false);
+});
+

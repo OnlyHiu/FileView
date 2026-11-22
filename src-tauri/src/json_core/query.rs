@@ -67,15 +67,33 @@ fn parse_expr(expr: &str) -> Result<Vec<Step>, String> {
             }
             '[' => {
                 i += 1;
-                if i < chars.len() && chars[i] == '\'' {
+                if i < chars.len() && (chars[i] == '\'' || chars[i] == '"') {
+                    // 带引号的键名：支持反斜杠转义（与 escape_key 的输出对齐）
+                    let quote = chars[i];
                     i += 1;
-                    let start = i;
-                    while i < chars.len() && chars[i] != '\'' {
+                    let mut key = String::new();
+                    while i < chars.len() {
+                        let c = chars[i];
+                        if c == '\\' && i + 1 < chars.len() {
+                            // 转义序列：\' -> '，\\ -> \，其余取字面量
+                            let nxt = chars[i + 1];
+                            key.push(match nxt {
+                                '\'' => '\'',
+                                '"' => '"',
+                                '\\' => '\\',
+                                other => other,
+                            });
+                            i += 2;
+                            continue;
+                        }
+                        if c == quote {
+                            break;
+                        }
+                        key.push(c);
                         i += 1;
                     }
-                    let key: String = chars[start..i].iter().collect();
                     if i < chars.len() {
-                        i += 1; // skip '
+                        i += 1; // skip 收尾引号
                     }
                     if i < chars.len() && chars[i] == ']' {
                         i += 1;
@@ -109,13 +127,8 @@ fn parse_expr(expr: &str) -> Result<Vec<Step>, String> {
     Ok(steps)
 }
 
-fn escape_key(k: &str) -> String {
-    if k.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$') && !k.is_empty() {
-        k.to_string()
-    } else {
-        format!("['{}']", k.replace('\'', "\\'"))
-    }
-}
+/// 路径片段转义与拼接统一由 parser 提供（见 parser::escape_key / parser::join_key），
+/// 避免解析与查询两侧的路径规则漂移。
 
 /// 在值上执行路径匹配，收集命中的路径
 fn collect(value: &Value, base: &str, steps: &[Step], out: &mut Vec<String>) {
@@ -127,11 +140,7 @@ fn collect(value: &Value, base: &str, steps: &[Step], out: &mut Vec<String>) {
         Step::Child(key) => {
             if let Value::Object(map) = value {
                 if let Some(v) = map.get(key) {
-                    let path = if base == "root" {
-                        format!("root.{}", escape_key(key))
-                    } else {
-                        format!("{}.{}", base, escape_key(key))
-                    };
+                    let path = super::parser::join_key(base, key);
                     collect(v, &path, &steps[1..], out);
                 }
             }
@@ -146,11 +155,7 @@ fn collect(value: &Value, base: &str, steps: &[Step], out: &mut Vec<String>) {
         Step::Wildcard => match value {
             Value::Object(map) => {
                 for (k, v) in map {
-                    let path = if base == "root" {
-                        format!("root.{}", escape_key(k))
-                    } else {
-                        format!("{}.{}", base, escape_key(k))
-                    };
+                    let path = super::parser::join_key(base, k);
                     collect(v, &path, &steps[1..], out);
                 }
             }
@@ -173,11 +178,7 @@ fn collect(value: &Value, base: &str, steps: &[Step], out: &mut Vec<String>) {
                 match value {
                     Value::Object(map) => {
                         for (k, v) in map {
-                            let path = if base == "root" {
-                                format!("root.{}", escape_key(k))
-                            } else {
-                                format!("{}.{}", base, escape_key(k))
-                            };
+                            let path = super::parser::join_key(base, k);
                             if key == "*" || k == key {
                                 collect(v, &path, rest, out);
                             }
@@ -261,5 +262,20 @@ mod tests {
     fn test_query_jsonl() {
         let r = query("{\"a\":1}\n{\"a\":2}\n", "$[*].a", ParseMode::Jsonl).unwrap();
         assert_eq!(r, vec!["root[0].a", "root[1].a"]);
+    }
+
+    #[test]
+    fn test_bracket_key_with_escaped_quote() {
+        // 解析器给含单引号的键生成的路径是 root['a\'b']，
+        // 查询引擎必须能把它解析回同一个键（否则路径无法回放）
+        let src = r#"{"a'b": 1}"#;
+        let r = query(src, r"$['a\'b']", ParseMode::Strict).unwrap();
+        assert_eq!(r, vec![r"root['a\'b']"]);
+    }
+
+    #[test]
+    fn test_bracket_key_with_double_quotes() {
+        let r = query(r#"{"a\"b": 1}"#, r#"$["a\"b"]"#, ParseMode::Strict).unwrap();
+        assert_eq!(r.len(), 1);
     }
 }

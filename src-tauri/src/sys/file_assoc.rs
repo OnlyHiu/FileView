@@ -32,6 +32,27 @@ pub const SUPPORTED_EXTS: &[&str] = &[
 
 const APP_DISPLAY_NAME: &str = "FileView";
 
+/**
+ * 过滤出受支持的扩展名（去点、去空白、转小写），其余忽略。
+ *
+ * 设置文件里的扩展名清单可能来自旧版本、被手工改过，或被别处写坏。
+ * 若把不受支持的项原样传下去，`register_many` 会**整批拒绝**
+ * （先整体校验是为了避免半成功状态），
+ * 结果是一个坏值就让**所有**关联都注册不上，且没有任何提示。
+ */
+pub fn filter_supported(exts: &[String]) -> Vec<String> {
+    exts.iter()
+        .filter_map(|e| {
+            let e = e.trim().trim_start_matches('.').to_ascii_lowercase();
+            if SUPPORTED_EXTS.contains(&e.as_str()) {
+                Some(e)
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
 fn prog_id(ext: &str) -> String {
     format!("{}.{}", registry::PROG_ID_PREFIX, ext)
 }
@@ -94,11 +115,16 @@ pub fn register_many(exts: &[String]) -> Result<Vec<String>, String> {
         }
         done.push(ext.clone());
     }
+    // 能力表（Capabilities / RegisteredApplications）必须**无条件**刷新：
+    // 它可能被外部清理（注册表清理工具 / 用户手动删除），
+    // 此时 ProgID 还在、changed 为 false，若跳过刷新，
+    // 本应用就永远不会再出现在 Windows「默认应用」列表里。
+    // 刷新失败也不能吞掉——否则界面报告成功，系统里却没有。
+    refresh_capabilities()?;
     // 只有真的发生了变更才广播：
     // SHCNE_ASSOCCHANGED 会让资源管理器重读整个关联数据库并刷新桌面，
     // 无谓广播会让用户看到桌面图标闪烁。
     if changed {
-        let _ = refresh_capabilities();
         registry::notify_shell_assoc_changed();
     }
     Ok(done)
@@ -191,9 +217,10 @@ pub fn unregister_many(exts: &[String]) -> Result<Vec<String>, String> {
         }
         done.push(ext.clone());
     }
+    // 能力表同样要无条件刷新（否则外部清理后无法自愈）
+    refresh_capabilities()?;
     // 只有真的发生了变更才广播，避免无谓的桌面图标刷新
     if changed {
-        let _ = refresh_capabilities();
         registry::notify_shell_assoc_changed();
     }
     Ok(done)

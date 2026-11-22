@@ -1,6 +1,6 @@
 // 查询页：JSONPath 查询 + 全文搜索结果
 
-import React from "react";
+import React, { useMemo } from "react";
 import { useJsonStore } from "../stores/jsonStore";
 import { Button, TextInput, InfoBar, Icon, SectionHeader, Card } from "../components/ui";
 
@@ -21,8 +21,18 @@ export const QueryPanel: React.FC = () => {
   const searchInValues = useJsonStore((s) => s.searchInValues);
   const toggleSearchScope = useJsonStore((s) => s.toggleSearchScope);
 
-  const nodeByPath = (p: string) => result?.nodes.find((n) => n.path === p);
-  const nodeById = (id: number) => result?.nodes.find((n) => n.id === id);
+  // 节点索引：按 path / id 建表，避免每渲染一行就线性扫描整棵节点表
+  // （大文档下 200 行 × 十万节点 = 每次渲染两千万次比较）
+  const byPath = useMemo(
+    () => new Map((result?.nodes ?? []).map((n) => [n.path, n])),
+    [result]
+  );
+  const byId = useMemo(
+    () => new Map((result?.nodes ?? []).map((n) => [n.id, n])),
+    [result]
+  );
+  const nodeByPath = (p: string) => byPath.get(p);
+  const nodeById = (id: number) => byId.get(id);
 
   return (
     <div className="h-full overflow-auto p-5">

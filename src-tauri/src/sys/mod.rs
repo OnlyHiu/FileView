@@ -34,7 +34,27 @@ pub fn collect_status() -> IntegrationStatus {
 /// 安全约束：只删除**确实由本应用旧版本写入**的键。
 /// 判定依据是键内记录的打开命令指向可执行文件名含 "JsonViewer"；
 /// 否则可能误删同名但属于其它软件的注册表项。
+///
+/// 性能：迁移要遍历 70+ 个扩展名做归属判定（上百次注册表读），
+/// 因此用一次性标记（`Software\FileView\migrated_legacy`）记录已执行，
+/// 之后的启动直接跳过——「一次性迁移」不应每次启动都跑一遍。
 pub fn migrate_legacy_brand() {
+    if registry::value_exists(registry::APP_KEY, "migrated_legacy") {
+        return;
+    }
+    let changed = migrate_legacy_brand_inner();
+    // 无论是否真的改过都打标记：迁移是幂等的，
+    // 反复扫描旧键没有收益（旧键不会被重新创建）。
+    if let Ok(key) = registry::create_key(registry::APP_KEY) {
+        let _ = registry::set_string(&key, "migrated_legacy", "1");
+    }
+    if changed {
+        registry::notify_shell_assoc_changed();
+    }
+}
+
+/// 迁移的实际执行体（见 [`migrate_legacy_brand`]）
+fn migrate_legacy_brand_inner() -> bool {
     use registry::{delete_key, open_key};
     let mut changed = false;
     // 旧「默认应用」登记：仅当其指向 JsonViewer 的 Capabilities 才删除
@@ -108,9 +128,7 @@ pub fn migrate_legacy_brand() {
         let _ = delete_key(r"Software\JsonViewer");
         changed = true;
     }
-    if changed {
-        registry::notify_shell_assoc_changed();
-    }
+    changed
 }
 
 /// 一键清理：移除所有系统集成痕迹

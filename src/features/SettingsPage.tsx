@@ -56,8 +56,18 @@ export const SettingsPage: React.FC = () => {
     { value: "last", label: "上次会话" },
   ];
 
-  const menuSelected = new Set(settings.contextMenuTargets);
-  const extSelected = new Set(settings.associatedExtensions);
+  /**
+   * 待提交的系统集成勾选状态。
+   *
+   * settings 里的值要等 IPC 回来才更新，连点两下会基于旧值计算 → 丢一次勾选，
+   * 甚至让「设置里没勾」与「注册表里还在」不一致。
+   * 这里用本地待提交状态兜底，并在 busy 期间禁用勾选框。
+   */
+  const [pendingMenu, setPendingMenu] = useState<string[] | null>(null);
+  const [pendingExt, setPendingExt] = useState<string[] | null>(null);
+
+  const menuSelected = new Set(pendingMenu ?? settings.contextMenuTargets);
+  const extSelected = new Set(pendingExt ?? settings.associatedExtensions);
 
   const menuOnMap = new Map(integration?.context_menu ?? []);
   const extOnMap = new Map(integration?.file_assoc ?? []);
@@ -66,14 +76,18 @@ export const SettingsPage: React.FC = () => {
     const next = new Set(menuSelected);
     if (next.has(id)) next.delete(id);
     else next.add(id);
-    void applyContextMenu([...next]);
+    const list = [...next];
+    setPendingMenu(list);
+    void applyContextMenu(list).finally(() => setPendingMenu(null));
   };
 
   const toggleExt = (ext: string) => {
     const next = new Set(extSelected);
     if (next.has(ext)) next.delete(ext);
     else next.add(ext);
-    void applyFileAssoc([...next]);
+    const list = [...next];
+    setPendingExt(list);
+    void applyFileAssoc(list).finally(() => setPendingExt(null));
   };
 
   return (
@@ -183,6 +197,7 @@ export const SettingsPage: React.FC = () => {
               onChange={() => toggleMenuTarget(t.id)}
               label={t.label}
               description={t.desc}
+              disabled={busy}
             />
           ))}
         </div>        <div className="flex gap-2 mt-3">
@@ -226,6 +241,7 @@ export const SettingsPage: React.FC = () => {
                     checked={extSelected.has(ext) || extOnMap.get(ext) === true}
                     onChange={() => toggleExt(ext)}
                     label={`.${ext}`}
+                    disabled={busy}
                   />
                 ))}
               </div>
@@ -305,7 +321,7 @@ export const SettingsPage: React.FC = () => {
       <Card
         icon="info"
         title="FileView"
-        description="v0.2.1 · Tauri 2 + React + Vite + Tailwind CSS"
+        description="v0.2.2 · Tauri 2 + React + Vite + Tailwind CSS"
       >
         <div className="text-[12px] text-ink-secondary leading-5">
           Windows 11 Fluent 风格的多格式文件查看与编辑器。支持 JSON / JSONC / JSONL、Markdown、

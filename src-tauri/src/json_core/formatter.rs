@@ -23,19 +23,25 @@ impl Indent {
 ///
 /// 与 parser::parse 保持一致：用 `split('\n')` 分行并单独剥离 `\r`，
 /// 这样 CRLF 文件的行号与解析结果完全对应。
+///
+/// **坏行策略与 parser::parse 一致**：解析能保留好行并给出坏行诊断，
+/// 格式化若因一行坏就整体失败，用户就无法修复文件——
+/// 因此坏行原样保留（不加工、不丢弃），好行照常处理。
 fn map_jsonl_lines(
     text: &str,
     f: impl Fn(&Value) -> Result<String, String>,
 ) -> Result<String, String> {
     let mut out: Vec<String> = Vec::new();
-    for (idx, seg) in text.split('\n').enumerate() {
+    for seg in text.split('\n') {
         let content = seg.strip_suffix('\r').unwrap_or(seg);
         if content.trim().is_empty() {
             continue;
         }
-        let v: Value = serde_json::from_str(content.trim())
-            .map_err(|e| format!("第 {} 行解析失败: {}", idx + 1, e))?;
-        out.push(f(&v)?);
+        match serde_json::from_str::<Value>(content.trim()) {
+            Ok(v) => out.push(f(&v)?),
+            // 坏行原样保留，避免整份文件无法格式化
+            Err(_) => out.push(content.to_string()),
+        }
     }
     Ok(out.join("\n"))
 }
@@ -155,5 +161,24 @@ mod tests {
         let out = sort_keys("{\"b\":1,\"a\":2}\n{\"d\":1,\"c\":2}", ParseMode::Jsonl, &Indent::Spaces(2)).unwrap();
         assert!(out.find("\"a\"").unwrap() < out.find("\"b\"").unwrap());
         assert!(out.find("\"c\"").unwrap() < out.find("\"d\"").unwrap());
+    }
+
+    #[test]
+    fn test_jsonl_bad_line_does_not_block_formatting() {
+        // 解析能保留好行并给出坏行诊断，格式化也必须能处理同一份文件，
+        // 否则用户无法用自己的工具修复文件
+        let src = "{\"id\":1}\n{\"id\": 2,}\n{\"id\":3}";
+        let out = format(src, ParseMode::Jsonl, &Indent::Spaces(2)).unwrap();
+        assert!(out.contains("\"id\": 1"), "{}", out);
+        assert!(out.contains("\"id\": 3"), "{}", out);
+        // 坏行原样保留，不被丢弃
+        assert!(out.contains("{\"id\": 2,}"), "{}", out);
+    }
+
+    #[test]
+    fn test_jsonl_query_tolerates_bad_line() {
+        // to_value 同样要跳过坏行：否则 JSONPath 查询整份文件都用不了
+        let v = super::super::parser::to_value("{\"a\":1}\n{oops\n{\"b\":2}", ParseMode::Jsonl).unwrap();
+        assert_eq!(v.as_array().map(|a| a.len()), Some(2));
     }
 }

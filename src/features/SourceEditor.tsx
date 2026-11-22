@@ -117,6 +117,11 @@ export const SourceEditor: React.FC<{
   const indent = useSettingsStore((s) => s.settings.indent);
   /** 行高（像素）：与 CSS 变量 --json-line-height 保持一致 */
   const lineHeightPx = Math.max(1, Math.round(fontSize * 1.6));
+  /**
+   * 制表位宽度：高亮层与透明 textarea 必须一致，
+   * 否则含 Tab 的文件在两层里列宽不同 → 文字横向错位（重影）。
+   */
+  const tabSize = indent === "tab" ? 4 : Math.max(1, Number(indent) || 2);
 
   // 窗口化高亮：只为可见区域生成 token
   const highlighter = useMemo(() => new WindowHighlighter(text, lang), [text, lang]);
@@ -269,7 +274,11 @@ export const SourceEditor: React.FC<{
   return (
     <div
       className="relative h-full overflow-hidden font-mono"
-      style={{ fontSize: "var(--json-font-size)", lineHeight: "var(--json-line-height)" }}
+      style={{
+        fontSize: "var(--json-font-size)",
+        lineHeight: "var(--json-line-height)",
+        tabSize,
+      }}
     >
       {/* 行号层 */}
       <div className="absolute left-0 top-0 bottom-0 w-12 overflow-hidden bg-smoke-bg-subtle border-r border-stroke select-none z-20">
@@ -356,8 +365,8 @@ export const SourceEditor: React.FC<{
         onKeyUp={updateCursorLine}
         onClick={updateCursorLine}
         onSelect={updateCursorLine}
-        className="absolute left-12 top-0 right-0 bottom-0 w-[calc(100%-3rem)] h-full resize-none bg-transparent text-transparent caret-[var(--accent)] whitespace-pre overflow-auto outline-none px-3 py-0"
-        style={{ tabSize: 2 }}
+        className="editor-surface absolute left-12 top-0 right-0 bottom-0 w-[calc(100%-3rem)] h-full resize-none bg-transparent text-transparent caret-[var(--accent)] whitespace-pre overflow-auto outline-none px-3 py-0"
+        style={{ tabSize }}
       />
 
       {/* 错误提示条 */}

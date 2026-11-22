@@ -42,7 +42,7 @@ pub struct FlatNode {
     pub id: usize,
     /// 显示路径，如 root.users[2].name
     pub path: String,
-    /// 键名（数组元素为 None）
+    /// 键名（数组元素为下标字符串，如 "0"）
     pub key: Option<String>,
     /// 值的短显示文本（字符串带引号；对象/数组为摘要）
     pub value: String,
@@ -51,7 +51,10 @@ pub struct FlatNode {
     pub has_children: bool,
     /// 子节点数量（对象=键数，数组=长度，标量=0）
     pub child_count: usize,
-    /// 在原始文本中的近似位置（用于编辑器联动；严格模式下填充）
+    /// 在原始文本中的位置（字节偏移）。
+    ///
+    /// 当前解析器不做位置标注，恒为 `None`；
+    /// 保留字段是为了不破坏既有序列化结构（前端按可选字段读取）。
     pub offset: Option<usize>,
     /// 父节点 id（根为 None）
     pub parent: Option<usize>,
@@ -338,11 +341,7 @@ impl Flattener {
                     parent,
                 );
                 for (k, v) in map {
-                    let child_path = if path == "root" {
-                        format!("root.{}", escape_key(k))
-                    } else {
-                        format!("{}.{}", path, escape_key(k))
-                    };
+                    let child_path = join_key(&path, k);
                     self.walk(v, child_path, Some(k.clone()), depth + 1, Some(id));
                 }
             }
@@ -380,11 +379,27 @@ impl Flattener {
     }
 }
 
-fn escape_key(k: &str) -> String {
-    if k.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$') && !k.is_empty() {
+/// 把键名转成路径片段。
+///
+/// 简单标识符直接用；其余（含空格 / 点 / 引号等）用方括号写法并转义单引号。
+/// 与查询引擎的解析规则一一对应（`['a\'b']` 会被解析回键 `a'b`）。
+pub(crate) fn escape_key(k: &str) -> String {    if k.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$') && !k.is_empty() {
         k.to_string()
     } else {
         format!("['{}']", k.replace('\'', "\\'"))
+    }
+}
+
+/// 把基路径与键名拼成完整路径。
+///
+/// 方括号写法时**不能**加点：`root` + `['a\'b']` 应为 `root['a\'b']`，
+/// 写成 `root.['a\'b']` 既不是合法路径，也无法被查询引擎解析回去。
+pub(crate) fn join_key(base: &str, key: &str) -> String {
+    let escaped = escape_key(key);
+    if escaped.starts_with('[') {
+        format!("{}{}", base, escaped)
+    } else {
+        format!("{}.{}", base, escaped)
     }
 }
 
@@ -482,11 +497,6 @@ pub fn parse(text: &str, mode: ParseMode) -> ParseResult {
         }
     };
 
-    // 宽容模式下对不支持的重复键等产生警告
-    if matches!(mode, ParseMode::Jsonc) && effective.len() != text.len() {
-        // 提示注释/尾逗号已忽略（信息性）
-    }
-
     let mut flattener = Flattener::new();
     // JSONL 恒为合成根数组（即使只有一行），保证 root[idx] 路径与查询引擎一致
     if values.len() == 1 && !matches!(mode, ParseMode::Jsonl) {
@@ -542,16 +552,18 @@ pub fn to_value(text: &str, mode: ParseMode) -> Result<Value, String> {
         ParseMode::Jsonc => serde_json::from_str(&strip_jsonc(text)).map_err(|e| format!("解析失败: {}", e)),
         ParseMode::Jsonl => {
             let mut values = Vec::new();
-            // 与 parse() 保持一致：用 split('\n') 而非 lines()，以便 CRLF 精确记账
-            for (idx, seg) in text.split('\n').enumerate() {
+            // 与 parse() 保持一致：用 split('\n') 而非 lines()，以便 CRLF 精确记账。
+            // 坏行**跳过**（而不是整体失败）：parse() 本来就能保留好行并给出坏行诊断，
+            // 若这里因一行坏就整体报错，用户将无法格式化 / 查询 / 排序自己的文件。
+            for seg in text.split('\n') {
                 let content = seg.strip_suffix('\r').unwrap_or(seg);
                 let t = content.trim();
                 if t.is_empty() {
                     continue;
                 }
-                let v: Value = serde_json::from_str(t)
-                    .map_err(|e| format!("第 {} 行解析失败: {}", idx + 1, e))?;
-                values.push(v);
+                if let Ok(v) = serde_json::from_str::<Value>(t) {
+                    values.push(v);
+                }
             }
             Ok(Value::Array(values))
         }

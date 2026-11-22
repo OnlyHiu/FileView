@@ -482,11 +482,14 @@ export interface SearchHit {
   path: string;
   /** 行号（1 起） */
   line: number;
-  /** 列号（1 起） */
+  /** 列号（1 起，按 UTF-16 码元计） */
   column: number;
-  /** 命中起始字符偏移（整个文件） */
+  /** 命中起始偏移（整个文件，按 **UTF-16 码元**计）
+   *
+   * 与 JS 字符串下标口径一致（可直接用于 `textarea.setSelectionRange`）。
+   */
   offset: number;
-  /** 命中长度（字符） */
+  /** 命中长度（UTF-16 码元） */
   length: number;
   /** 命中所在整行文本 */
   text: string;
@@ -504,6 +507,8 @@ export interface FolderSearchResult {
 export interface ReplaceResult {
   changed_files: number;
   replaced: number;
+  /** 改写失败的文件（被占用 / 只读 / 无权限 / 非文本文件） */
+  failed_files?: string[];
 }
 
 export const MENU_TARGETS: { id: string; label: string; desc: string }[] = [
